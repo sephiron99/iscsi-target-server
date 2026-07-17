@@ -1,0 +1,159 @@
+//! Tokio adapter for the runtime-independent iSCSI frame codec.
+
+use bytes::{Bytes, BytesMut};
+use tokio_util::codec::{Decoder, Encoder};
+
+use crate::digest::DigestType;
+use crate::error::CodecError;
+use crate::frame::{FrameCodec, FrameConfig, PduFrame, RawFrame};
+use crate::Pdu;
+
+/// Converts a Tokio byte stream into typed iSCSI PDUs while preserving AHS.
+pub struct IscsiCodec {
+    frames: FrameCodec,
+}
+
+impl IscsiCodec {
+    pub fn new() -> Self {
+        Self {
+            frames: FrameCodec::default(),
+        }
+    }
+
+    pub fn with_config(config: FrameConfig) -> Self {
+        Self {
+            frames: FrameCodec::new(config),
+        }
+    }
+
+    pub fn frame_config(&self) -> &FrameConfig {
+        self.frames.config()
+    }
+
+    /// Apply digest algorithms after Login negotiation completes.
+    pub fn set_digests(&mut self, header: DigestType, data: DigestType) {
+        self.frames.config_mut().set_digests(header, data);
+    }
+
+    pub fn set_max_ahs_length(&mut self, len: usize) {
+        self.frames.config_mut().set_max_ahs_length(len);
+    }
+
+    pub fn set_max_recv_data_segment_length(&mut self, len: u32) {
+        self.frames
+            .config_mut()
+            .set_max_data_segment_length(len as usize);
+    }
+}
+
+impl Default for IscsiCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Decoder for IscsiCodec {
+    type Item = PduFrame;
+    type Error = CodecError;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let Some(frame) = self.frames.decode(src)? else {
+            return Ok(None);
+        };
+        Ok(Some(frame.into_pdu()?))
+    }
+}
+
+/// Compatibility encoder for PDUs that do not carry an AHS.
+impl Encoder<Pdu> for IscsiCodec {
+    type Error = CodecError;
+
+    fn encode(&mut self, item: Pdu, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        let frame = RawFrame::from_pdu(&item, Bytes::new())?;
+        self.frames.encode(&frame, dst)?;
+        Ok(())
+    }
+}
+
+impl Encoder<PduFrame> for IscsiCodec {
+    type Error = CodecError;
+
+    fn encode(&mut self, item: PduFrame, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        let frame = item.into_raw()?;
+        self.frames.encode(&frame, dst)?;
+        Ok(())
+    }
+}
+
+impl Encoder<RawFrame> for IscsiCodec {
+    type Error = CodecError;
+
+    fn encode(&mut self, item: RawFrame, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        self.frames.encode(&item, dst)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::control::NopOut;
+
+    fn nop_out(data: Bytes) -> Pdu {
+        Pdu::NopOut(NopOut {
+            lun: 0,
+            initiator_task_tag: 7,
+            target_transfer_tag: u32::MAX,
+            cmd_sn: 11,
+            exp_stat_sn: 13,
+            data,
+        })
+    }
+
+    #[test]
+    fn codec_error_satisfies_tokio_io_bound() {
+        fn assert_from_io<T: From<std::io::Error>>() {}
+        assert_from_io::<CodecError>();
+    }
+
+    #[test]
+    fn tokio_adapter_round_trips_pdu_and_ahs_with_digests() {
+        let ahs = Bytes::from_static(b"\x01\x00\x00\x00\xde\xad\xbe\xef");
+        let pdu = PduFrame::new(nop_out(Bytes::from_static(b"ping")), ahs.clone());
+
+        let mut encoder = IscsiCodec::new();
+        encoder.set_digests(DigestType::Crc32c, DigestType::Crc32c);
+        let mut wire = BytesMut::new();
+        Encoder::encode(&mut encoder, pdu, &mut wire).unwrap();
+
+        let mut decoder = IscsiCodec::new();
+        decoder.set_digests(DigestType::Crc32c, DigestType::Crc32c);
+        let decoded = Decoder::decode(&mut decoder, &mut wire).unwrap().unwrap();
+
+        assert_eq!(decoded.ahs, ahs);
+        match decoded.pdu {
+            Pdu::NopOut(pdu) => assert_eq!(pdu.data, Bytes::from_static(b"ping")),
+            other => panic!("unexpected PDU: {other:?}"),
+        }
+        assert!(wire.is_empty());
+    }
+
+    #[test]
+    fn compatibility_pdu_encoder_uses_empty_ahs() {
+        let mut codec = IscsiCodec::new();
+        let mut wire = BytesMut::new();
+        Encoder::encode(&mut codec, nop_out(Bytes::from_static(b"echo")), &mut wire).unwrap();
+
+        let decoded = Decoder::decode(&mut codec, &mut wire).unwrap().unwrap();
+        assert!(decoded.ahs.is_empty());
+        assert!(matches!(decoded.pdu, Pdu::NopOut(_)));
+    }
+
+    #[test]
+    fn decode_eof_reports_truncated_frame_as_io_error() {
+        let mut codec = IscsiCodec::new();
+        let mut truncated = BytesMut::from(&[0u8; 47][..]);
+        let error = Decoder::decode_eof(&mut codec, &mut truncated).unwrap_err();
+        assert!(matches!(error, CodecError::Io(_)));
+    }
+}
