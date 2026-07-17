@@ -9,7 +9,10 @@ use bytes::BytesMut;
 
 use crate::digest::DigestType;
 use crate::frame::{FrameConfig, DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH, MAX_DATA_SEGMENT_LENGTH};
-use crate::login::{LoginRequest, LoginResponse, TextParameterError, TextParameters};
+use crate::login::{
+    AuthMethod, AuthMethodError, IscsiName, IscsiNameError, LoginRequest, LoginResponse,
+    SessionType, SessionTypeError, TextParameterError, TextParameters,
+};
 use crate::opcode::LoginStage;
 
 pub const MIN_MAX_RECV_DATA_SEGMENT_LENGTH: usize = 512;
@@ -19,6 +22,10 @@ pub const DEFAULT_MAX_LOGIN_TEXT_SEQUENCE_LENGTH: usize = 64 * 1024;
 const HEADER_DIGEST: &str = "HeaderDigest";
 const DATA_DIGEST: &str = "DataDigest";
 const MAX_RECV_DATA_SEGMENT_LENGTH_KEY: &str = "MaxRecvDataSegmentLength";
+const AUTH_METHOD: &str = "AuthMethod";
+const INITIATOR_NAME: &str = "InitiatorName";
+const TARGET_NAME: &str = "TargetName";
+const SESSION_TYPE: &str = "SessionType";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginSide {
@@ -124,6 +131,38 @@ pub enum NegotiationError {
 
     #[error("{side:?} declared {key} more than once")]
     DuplicateDeclaration { side: LoginSide, key: &'static str },
+
+    #[error("{key} cannot be sent by {side:?} during Login")]
+    KeyFromWrongSide { side: LoginSide, key: &'static str },
+
+    #[error("invalid AuthMethod {value:?} from {side:?}: {source}")]
+    InvalidAuthMethod {
+        side: LoginSide,
+        value: String,
+        source: AuthMethodError,
+    },
+
+    #[error("invalid AuthMethod selection {value:?} from {side:?}")]
+    InvalidAuthMethodSelection { side: LoginSide, value: String },
+
+    #[error("{side:?} selected AuthMethod {selected:?}, but it was not offered")]
+    AuthMethodNotOffered { side: LoginSide, selected: String },
+
+    #[error("AuthMethod was sent again after a proposal or completed selection")]
+    RepeatedAuthMethod,
+
+    #[error("invalid {key} {value:?}: {source}")]
+    InvalidIscsiName {
+        key: &'static str,
+        value: String,
+        source: IscsiNameError,
+    },
+
+    #[error("invalid SessionType {value:?}: {source}")]
+    InvalidSessionType {
+        value: String,
+        source: SessionTypeError,
+    },
 
     #[error("invalid {key} proposal {value:?} from {side:?}")]
     InvalidDigestProposal {
@@ -240,6 +279,89 @@ enum DigestNegotiation {
     Complete(DigestType),
 }
 
+#[derive(Debug, Clone, Default)]
+enum AuthMethodNegotiation {
+    #[default]
+    Unset,
+    Proposed {
+        by: LoginSide,
+        offered: Vec<AuthMethod>,
+    },
+    Complete(AuthMethod),
+}
+
+impl AuthMethodNegotiation {
+    fn observe(&mut self, side: LoginSide, value: &str) -> Result<(), NegotiationError> {
+        match self {
+            Self::Unset => {
+                let offered = parse_auth_method_proposal(side, value)?;
+                *self = Self::Proposed { by: side, offered };
+                Ok(())
+            }
+            Self::Proposed { by, offered } => {
+                if *by == side {
+                    return Err(NegotiationError::RepeatedAuthMethod);
+                }
+                if value.is_empty() || value.contains(',') {
+                    return Err(NegotiationError::InvalidAuthMethodSelection {
+                        side,
+                        value: value.to_owned(),
+                    });
+                }
+                let selected = parse_auth_method(side, value)?;
+                if !offered.contains(&selected) {
+                    return Err(NegotiationError::AuthMethodNotOffered {
+                        side,
+                        selected: value.to_owned(),
+                    });
+                }
+                *self = Self::Complete(selected);
+                Ok(())
+            }
+            Self::Complete(_) => Err(NegotiationError::RepeatedAuthMethod),
+        }
+    }
+
+    fn selected(&self) -> Option<&AuthMethod> {
+        match self {
+            Self::Complete(selected) => Some(selected),
+            Self::Unset | Self::Proposed { .. } => None,
+        }
+    }
+}
+
+fn parse_auth_method_proposal(
+    side: LoginSide,
+    value: &str,
+) -> Result<Vec<AuthMethod>, NegotiationError> {
+    if value.is_empty() {
+        return Err(NegotiationError::InvalidAuthMethodSelection {
+            side,
+            value: value.to_owned(),
+        });
+    }
+    let mut offered = Vec::new();
+    for item in value.split(',') {
+        let method = parse_auth_method(side, item)?;
+        if offered.contains(&method) {
+            return Err(NegotiationError::InvalidAuthMethodSelection {
+                side,
+                value: value.to_owned(),
+            });
+        }
+        offered.push(method);
+    }
+    Ok(offered)
+}
+
+fn parse_auth_method(side: LoginSide, value: &str) -> Result<AuthMethod, NegotiationError> {
+    AuthMethod::parse(value).map_err(|source| NegotiationError::InvalidAuthMethod {
+        side,
+        value: value.to_owned(),
+        source,
+    })
+}
+
 impl DigestNegotiation {
     fn observe(
         &mut self,
@@ -324,6 +446,10 @@ fn parse_digest_proposal(
 /// Target-side accumulator for framing-related Login keys.
 #[derive(Debug, Clone)]
 pub struct TargetLoginNegotiation {
+    auth_method: AuthMethodNegotiation,
+    initiator_name: Option<IscsiName>,
+    target_name: Option<IscsiName>,
+    session_type: Option<SessionType>,
     header_digest: DigestNegotiation,
     data_digest: DigestNegotiation,
     initiator_max_recv: Option<usize>,
@@ -341,6 +467,10 @@ pub struct TargetLoginNegotiation {
 impl Default for TargetLoginNegotiation {
     fn default() -> Self {
         Self {
+            auth_method: AuthMethodNegotiation::default(),
+            initiator_name: None,
+            target_name: None,
+            session_type: None,
             header_digest: DigestNegotiation::default(),
             data_digest: DigestNegotiation::default(),
             initiator_max_recv: None,
@@ -366,12 +496,73 @@ impl TargetLoginNegotiation {
         self.completed
     }
 
+    pub fn selected_auth_method(&self) -> Option<&AuthMethod> {
+        self.auth_method.selected()
+    }
+
+    pub fn initiator_name(&self) -> Option<&IscsiName> {
+        self.initiator_name.as_ref()
+    }
+
+    pub fn target_name(&self) -> Option<&IscsiName> {
+        self.target_name.as_ref()
+    }
+
+    /// SessionType이 생략되면 RFC 7143 13.21절 기본값 Normal을 반환한다.
+    pub fn session_type(&self) -> SessionType {
+        self.session_type.unwrap_or_default()
+    }
+
+    pub fn declared_session_type(&self) -> Option<SessionType> {
+        self.session_type
+    }
+
     pub fn max_text_sequence_length(&self) -> usize {
         self.max_text_sequence_length
     }
 
     pub fn set_max_text_sequence_length(&mut self, len: usize) {
         self.max_text_sequence_length = len.max(MIN_LOGIN_TEXT_SEQUENCE_LENGTH);
+    }
+
+    pub(crate) fn preview_initiator_parameters(
+        &self,
+        request: &LoginRequest,
+    ) -> Result<Option<TextParameters>, NegotiationError> {
+        if request.continue_ {
+            return Ok(None);
+        }
+        let len = self
+            .initiator_fragment
+            .len()
+            .saturating_add(request.params.as_bytes().len());
+        if len > self.max_text_sequence_length {
+            return Err(NegotiationError::TextSequenceTooLarge {
+                side: LoginSide::Initiator,
+                len,
+                max: self.max_text_sequence_length,
+            });
+        }
+        if let Some(previous) = self.initiator_fragment_stage {
+            if previous != request.current_stage {
+                return Err(NegotiationError::InvalidContinuation(
+                    LoginContinuationError::CrossesLoginStages {
+                        side: LoginSide::Initiator,
+                        previous,
+                        current: request.current_stage,
+                    },
+                ));
+            }
+        }
+        let mut encoded = BytesMut::with_capacity(len);
+        encoded.extend_from_slice(&self.initiator_fragment);
+        encoded.extend_from_slice(request.params.as_bytes());
+        TextParameters::from_complete_bytes(encoded.freeze())
+            .map(Some)
+            .map_err(|source| NegotiationError::InvalidText {
+                side: LoginSide::Initiator,
+                source,
+            })
     }
 
     /// Record one request/response exchange.
@@ -464,7 +655,7 @@ impl TargetLoginNegotiation {
 
         let request_is_empty_continuation = self.target_continuation_pending;
         if request_is_empty_continuation {
-            if !request.params.is_empty() || request.continue_ || request.transit {
+            if !request.params.is_empty() || request.continue_ {
                 return Err(NegotiationError::InvalidContinuation(
                     LoginContinuationError::TargetContinuationRequiresEmptyRequest,
                 ));
@@ -592,6 +783,10 @@ impl TargetLoginNegotiation {
     ) -> Result<(), NegotiationError> {
         for (key, value) in params.iter() {
             let standard_key = match key {
+                AUTH_METHOD => Some(AUTH_METHOD),
+                INITIATOR_NAME => Some(INITIATOR_NAME),
+                TARGET_NAME => Some(TARGET_NAME),
+                SESSION_TYPE => Some(SESSION_TYPE),
                 HEADER_DIGEST => Some(HEADER_DIGEST),
                 DATA_DIGEST => Some(DATA_DIGEST),
                 MAX_RECV_DATA_SEGMENT_LENGTH_KEY => Some(MAX_RECV_DATA_SEGMENT_LENGTH_KEY),
@@ -600,11 +795,39 @@ impl TargetLoginNegotiation {
             let Some(key) = standard_key else {
                 continue;
             };
-            if stage != LoginStage::Operational {
+            if key == AUTH_METHOD && stage != LoginStage::Security {
+                return Err(NegotiationError::KeyInWrongStage { key, stage });
+            }
+            if matches!(
+                key,
+                HEADER_DIGEST | DATA_DIGEST | MAX_RECV_DATA_SEGMENT_LENGTH_KEY
+            ) && stage != LoginStage::Operational
+            {
                 return Err(NegotiationError::KeyInWrongStage { key, stage });
             }
 
             match key {
+                AUTH_METHOD => self.auth_method.observe(side, value)?,
+                INITIATOR_NAME => {
+                    require_initiator(side, key)?;
+                    let parsed = parse_iscsi_name(key, value)?;
+                    declare_once(&mut self.initiator_name, parsed, side, key)?;
+                }
+                TARGET_NAME => {
+                    require_initiator(side, key)?;
+                    let parsed = parse_iscsi_name(key, value)?;
+                    declare_once(&mut self.target_name, parsed, side, key)?;
+                }
+                SESSION_TYPE => {
+                    require_initiator(side, key)?;
+                    let parsed = value.parse::<SessionType>().map_err(|source| {
+                        NegotiationError::InvalidSessionType {
+                            value: value.to_owned(),
+                            source,
+                        }
+                    })?;
+                    declare_once(&mut self.session_type, parsed, side, key)?;
+                }
                 HEADER_DIGEST => self.header_digest.observe(HEADER_DIGEST, side, value)?,
                 DATA_DIGEST => self.data_digest.observe(DATA_DIGEST, side, value)?,
                 MAX_RECV_DATA_SEGMENT_LENGTH_KEY => {
@@ -622,6 +845,34 @@ impl TargetLoginNegotiation {
         }
         Ok(())
     }
+}
+
+fn require_initiator(side: LoginSide, key: &'static str) -> Result<(), NegotiationError> {
+    if side != LoginSide::Initiator {
+        return Err(NegotiationError::KeyFromWrongSide { side, key });
+    }
+    Ok(())
+}
+
+fn parse_iscsi_name(key: &'static str, value: &str) -> Result<IscsiName, NegotiationError> {
+    IscsiName::parse(value).map_err(|source| NegotiationError::InvalidIscsiName {
+        key,
+        value: value.to_owned(),
+        source,
+    })
+}
+
+fn declare_once<T>(
+    slot: &mut Option<T>,
+    value: T,
+    side: LoginSide,
+    key: &'static str,
+) -> Result<(), NegotiationError> {
+    if slot.is_some() {
+        return Err(NegotiationError::DuplicateDeclaration { side, key });
+    }
+    *slot = Some(value);
+    Ok(())
 }
 
 fn parse_max_recv(side: LoginSide, value: &str) -> Result<usize, NegotiationError> {
@@ -775,6 +1026,120 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(parameters, NegotiatedFrameParameters::default());
+    }
+
+    #[test]
+    fn processes_authentication_identity_and_session_type() {
+        let request = request(
+            true,
+            false,
+            LoginStage::Security,
+            LoginStage::FullFeature,
+            b"AuthMethod=CHAP,None\0InitiatorName=iqn.2024-01.com.example:host\0TargetName=iqn.2024-01.com.example:disk0\0SessionType=Normal\0",
+        );
+        let response = response(
+            true,
+            false,
+            LoginStage::Security,
+            LoginStage::FullFeature,
+            b"AuthMethod=None\0",
+        );
+
+        let mut negotiation = TargetLoginNegotiation::new();
+        negotiation.observe_exchange(&request, &response).unwrap();
+
+        assert_eq!(negotiation.selected_auth_method(), Some(&AuthMethod::None));
+        assert_eq!(
+            negotiation.initiator_name().map(IscsiName::as_str),
+            Some("iqn.2024-01.com.example:host")
+        );
+        assert_eq!(
+            negotiation.target_name().map(IscsiName::as_str),
+            Some("iqn.2024-01.com.example:disk0")
+        );
+        assert_eq!(negotiation.session_type(), SessionType::Normal);
+        assert_eq!(
+            negotiation.declared_session_type(),
+            Some(SessionType::Normal)
+        );
+    }
+
+    #[test]
+    fn session_type_defaults_to_normal_when_omitted() {
+        assert_eq!(
+            TargetLoginNegotiation::new().session_type(),
+            SessionType::Normal
+        );
+        assert_eq!(TargetLoginNegotiation::new().declared_session_type(), None);
+    }
+
+    #[test]
+    fn rejects_identity_keys_from_target_and_duplicate_declarations() {
+        let request = request(
+            false,
+            false,
+            LoginStage::Security,
+            LoginStage::Security,
+            b"InitiatorName=iqn.2024-01.com.example:host\0",
+        );
+        let invalid_response = response(
+            false,
+            false,
+            LoginStage::Security,
+            LoginStage::Security,
+            b"SessionType=Normal\0",
+        );
+        assert_eq!(
+            TargetLoginNegotiation::new().observe_exchange(&request, &invalid_response),
+            Err(NegotiationError::KeyFromWrongSide {
+                side: LoginSide::Target,
+                key: SESSION_TYPE,
+            })
+        );
+
+        let mut negotiation = TargetLoginNegotiation::new();
+        let empty_response = response(
+            false,
+            false,
+            LoginStage::Security,
+            LoginStage::Security,
+            b"",
+        );
+        negotiation
+            .observe_exchange(&request, &empty_response)
+            .unwrap();
+        assert_eq!(
+            negotiation.observe_exchange(&request, &empty_response),
+            Err(NegotiationError::DuplicateDeclaration {
+                side: LoginSide::Initiator,
+                key: INITIATOR_NAME,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_auth_method_outside_security_negotiation() {
+        let request = request(
+            true,
+            false,
+            LoginStage::Operational,
+            LoginStage::FullFeature,
+            b"AuthMethod=None\0",
+        );
+        let response = response(
+            true,
+            false,
+            LoginStage::Operational,
+            LoginStage::FullFeature,
+            b"",
+        );
+        assert_eq!(
+            TargetLoginNegotiation::new().observe_exchange(&request, &response),
+            Err(NegotiationError::KeyInWrongStage {
+                key: AUTH_METHOD,
+                stage: LoginStage::Operational,
+            })
+        );
     }
 
     #[test]

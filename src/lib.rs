@@ -17,9 +17,11 @@ pub mod digest;
 pub mod error;
 pub mod frame;
 pub mod login;
+pub mod login_policy;
 pub mod negotiation;
 pub mod opcode;
 pub mod scsi;
+pub mod target_login;
 
 // codec은 tokio-util 의존성이 필요하므로 feature로 분리.
 // 순수 PDU 파싱/직렬화만 쓰는 경우 Tokio 의존성 없이 사용 가능.
@@ -32,12 +34,20 @@ pub use frame::{
     FrameCodec, FrameConfig, PduFrame, RawFrame, DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH,
     MAX_AHS_LENGTH, MAX_DATA_SEGMENT_LENGTH,
 };
+pub use login::{
+    AuthMethod, AuthMethodError, IscsiName, IscsiNameError, SessionType, SessionTypeError,
+};
+pub use login_policy::{
+    AuthenticationPolicy, DigestPolicy, ErrorRecoveryLevel, TargetLoginPolicy,
+    TargetLoginPolicyError, TaskReporting,
+};
 pub use negotiation::{
     LoginContinuationError, LoginSide, LoginTransitionError, NegotiatedFrameParameters,
     NegotiationError, TargetLoginNegotiation, DEFAULT_MAX_LOGIN_TEXT_SEQUENCE_LENGTH,
     MIN_LOGIN_TEXT_SEQUENCE_LENGTH, MIN_MAX_RECV_DATA_SEGMENT_LENGTH,
 };
 pub use opcode::Opcode;
+pub use target_login::{TargetLoginError, TargetLoginOutcome, TargetLoginProcessor};
 
 use bytes::{BufMut, Bytes, BytesMut};
 

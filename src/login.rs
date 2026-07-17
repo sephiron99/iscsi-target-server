@@ -15,6 +15,7 @@ use crate::error::PduError;
 use crate::opcode::{LoginStage, Opcode};
 
 use bytes::{BufMut, Bytes, BytesMut};
+use std::str::FromStr;
 
 // ─── Text Parameters (key=value) ───────────────────────────────────────────
 //
@@ -43,6 +44,205 @@ pub enum TextParameterError {
 
     #[error("text parameter contains invalid UTF-8 at byte offset {offset}")]
     InvalidUtf8 { offset: usize },
+}
+
+/// RFC 7143 12.1절의 표준 인증 방법과 보존 가능한 확장 방법.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthMethod {
+    Kerberos5,
+    Srp,
+    Chap,
+    None,
+    Extension(String),
+}
+
+impl AuthMethod {
+    pub fn parse(value: &str) -> Result<Self, AuthMethodError> {
+        match value {
+            "KRB5" => Ok(Self::Kerberos5),
+            "SRP" => Ok(Self::Srp),
+            "CHAP" => Ok(Self::Chap),
+            "None" => Ok(Self::None),
+            value if is_standard_label(value) => Ok(Self::Extension(value.to_owned())),
+            _ => Err(AuthMethodError::InvalidName(value.to_owned())),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Kerberos5 => "KRB5",
+            Self::Srp => "SRP",
+            Self::Chap => "CHAP",
+            Self::None => "None",
+            Self::Extension(value) => value,
+        }
+    }
+}
+
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum AuthMethodError {
+    #[error("invalid authentication method name {0:?}")]
+    InvalidName(String),
+}
+
+/// RFC 7143 13.21절의 SessionType 값.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SessionType {
+    Discovery,
+    #[default]
+    Normal,
+}
+
+impl SessionType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Discovery => "Discovery",
+            Self::Normal => "Normal",
+        }
+    }
+}
+
+impl FromStr for SessionType {
+    type Err = SessionTypeError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "Discovery" => Ok(Self::Discovery),
+            "Normal" => Ok(Self::Normal),
+            _ => Err(SessionTypeError::InvalidValue(value.to_owned())),
+        }
+    }
+}
+
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum SessionTypeError {
+    #[error("invalid SessionType {0:?}")]
+    InvalidValue(String),
+}
+
+/// 검증된 iSCSI node name의 wire 표현.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IscsiName(String);
+
+impl IscsiName {
+    pub const MAX_ENCODED_LEN: usize = 223;
+
+    pub fn parse(value: &str) -> Result<Self, IscsiNameError> {
+        if value.is_empty() {
+            return Err(IscsiNameError::Empty);
+        }
+        if value.len() > Self::MAX_ENCODED_LEN {
+            return Err(IscsiNameError::TooLong {
+                len: value.len(),
+                max: Self::MAX_ENCODED_LEN,
+            });
+        }
+
+        if let Some(rest) = value.strip_prefix("iqn.") {
+            validate_iqn(rest)?;
+        } else if let Some(rest) = value.strip_prefix("eui.") {
+            validate_hex_name("eui", rest, &[16])?;
+        } else if let Some(rest) = value.strip_prefix("naa.") {
+            validate_hex_name("naa", rest, &[16, 32])?;
+        } else {
+            return Err(IscsiNameError::UnknownFormat);
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for IscsiName {
+    type Err = IscsiNameError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value)
+    }
+}
+
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum IscsiNameError {
+    #[error("iSCSI name is empty")]
+    Empty,
+
+    #[error("iSCSI name length {len} exceeds {max} bytes")]
+    TooLong { len: usize, max: usize },
+
+    #[error("iSCSI name has an unknown format")]
+    UnknownFormat,
+
+    #[error("invalid IQN date")]
+    InvalidIqnDate,
+
+    #[error("IQN naming authority is empty")]
+    EmptyIqnAuthority,
+
+    #[error("invalid character at byte offset {offset}")]
+    InvalidCharacter { offset: usize },
+
+    #[error("{format} identifier has length {len}; expected one of {expected:?}")]
+    InvalidHexLength {
+        format: &'static str,
+        len: usize,
+        expected: &'static [usize],
+    },
+}
+
+fn validate_iqn(value: &str) -> Result<(), IscsiNameError> {
+    let bytes = value.as_bytes();
+    if bytes.len() < 9
+        || !bytes[..4].iter().all(u8::is_ascii_digit)
+        || bytes[4] != b'-'
+        || !bytes[5..7].iter().all(u8::is_ascii_digit)
+        || bytes[7] != b'.'
+    {
+        return Err(IscsiNameError::InvalidIqnDate);
+    }
+    let month = (bytes[5] - b'0') * 10 + (bytes[6] - b'0');
+    if !(1..=12).contains(&month) {
+        return Err(IscsiNameError::InvalidIqnDate);
+    }
+    if bytes[8..].is_empty() || bytes[8] == b':' {
+        return Err(IscsiNameError::EmptyIqnAuthority);
+    }
+    for (offset, byte) in bytes.iter().copied().enumerate() {
+        if !(byte.is_ascii_lowercase()
+            || byte.is_ascii_digit()
+            || matches!(byte, b'-' | b'.' | b':'))
+        {
+            return Err(IscsiNameError::InvalidCharacter { offset: offset + 4 });
+        }
+    }
+    Ok(())
+}
+
+fn validate_hex_name(
+    format: &'static str,
+    value: &str,
+    expected: &'static [usize],
+) -> Result<(), IscsiNameError> {
+    if !expected.contains(&value.len()) {
+        return Err(IscsiNameError::InvalidHexLength {
+            format,
+            len: value.len(),
+            expected,
+        });
+    }
+    if let Some(offset) = value.bytes().position(|byte| !byte.is_ascii_hexdigit()) {
+        return Err(IscsiNameError::InvalidCharacter { offset: offset + 4 });
+    }
+    Ok(())
+}
+
+fn is_standard_label(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+' | b'_' | b':')
+        })
 }
 
 impl TextParameters {
@@ -359,6 +559,41 @@ mod tests {
         assert_eq!(
             TextParameters::parse_complete(b"Key=ok\0\xff=x\0"),
             Err(TextParameterError::InvalidUtf8 { offset: 7 })
+        );
+    }
+
+    #[test]
+    fn parses_login_identity_value_types() {
+        assert_eq!(AuthMethod::parse("CHAP"), Ok(AuthMethod::Chap));
+        assert_eq!(AuthMethod::parse("None"), Ok(AuthMethod::None));
+        assert_eq!("Discovery".parse(), Ok(SessionType::Discovery));
+
+        for name in [
+            "iqn.2024-01.com.example:host",
+            "eui.02004567A425678D",
+            "naa.62004567BA64678D0123456789ABCDEF",
+        ] {
+            assert_eq!(IscsiName::parse(name).unwrap().as_str(), name);
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_iscsi_names() {
+        assert_eq!(
+            IscsiName::parse("iqn.2024-13.com.example"),
+            Err(IscsiNameError::InvalidIqnDate)
+        );
+        assert_eq!(
+            IscsiName::parse("iqn.2024-01.COM.example"),
+            Err(IscsiNameError::InvalidCharacter { offset: 12 })
+        );
+        assert!(matches!(
+            IscsiName::parse("eui.1234"),
+            Err(IscsiNameError::InvalidHexLength { .. })
+        ));
+        assert_eq!(
+            IscsiName::parse("not-an-iscsi-name"),
+            Err(IscsiNameError::UnknownFormat)
         );
     }
 

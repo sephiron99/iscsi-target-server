@@ -45,14 +45,14 @@
 
 ## 2. Target Login 정책과 응답 생성
 
-- [ ] `TargetLoginPolicy`와 협상 가능한 값/기본값 정의
-- [ ] `AuthMethod`, `InitiatorName`, `TargetName`, `SessionType` 처리
-- [ ] normal/discovery session 구분과 허용 정책
-- [ ] 지원하는 operational key의 제안, 선택, 거부 규칙 구현
-- [ ] Initiator 제안에서 `LoginResponse` text와 status class/detail 생성
-- [ ] Continue/Transit 조합과 여러 Login PDU에 걸친 응답 분할
-- [ ] 잘못된 stage, 필수 key 누락과 지원 불가 값의 일관된 거부
-- [ ] 협상 완료 후 `FrameConfig` 전환을 Connection 계층에 전달
+- [x] `TargetLoginPolicy`와 협상 가능한 값/기본값 정의
+- [x] `AuthMethod`, `InitiatorName`, `TargetName`, `SessionType` 처리
+- [x] normal/discovery session 구분과 허용 정책
+- [x] 지원하는 operational key의 제안, 선택, 거부 규칙 구현
+- [x] Initiator 제안에서 `LoginResponse` text와 status class/detail 생성
+- [x] Continue/Transit 조합과 여러 Login PDU에 걸친 응답 분할
+- [x] 잘못된 stage, 필수 key 누락과 지원 불가 값의 일관된 거부
+- [x] 협상 완료 후 `FrameConfig` 전환을 Connection 계층에 전달
 
 완료 조건:
 
