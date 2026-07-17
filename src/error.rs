@@ -1,6 +1,6 @@
 // pdu/src/error.rs
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum PduError {
     #[error("unknown opcode: 0x{0:02x}")]
     UnknownOpcode(u8),
@@ -15,8 +15,11 @@ pub enum PduError {
         got: usize,
     },
 
-    #[error("malformed PDU: {0}")]
-    Malformed(String),
+    #[error("unsupported opcode: 0x{0:02x}")]
+    UnsupportedOpcode(u8),
+
+    #[error("unknown SCSI task management function: 0x{0:02x}")]
+    UnknownTaskManagementFunction(u8),
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

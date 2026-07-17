@@ -31,12 +31,12 @@
 
 ## 1. 현재 Login 협상 변경 완료
 
-- [-] `negotiation.rs`와 연관된 Login/frame/codec 변경 전체 검토
-- [ ] Login text 원문 보존, 조각 누적과 stage 전환 경계 테스트 보강
-- [ ] Digest와 `MaxRecvDataSegmentLength` 협상 결과가 성공 시점에만 원자적으로 적용되는지 확인
-- [ ] 오류 타입과 공개 API 이름 검토
-- [ ] no-default/all-features 테스트, clippy와 format 검증
-- [ ] 현재 변경을 하나의 집중된 commit으로 정리
+- [x] `negotiation.rs`와 연관된 Login/frame/codec 변경 전체 검토
+- [x] Login text 원문 보존, 조각 누적과 stage 전환 경계 테스트 보강
+- [x] Digest와 `MaxRecvDataSegmentLength` 협상 결과가 성공 시점에만 원자적으로 적용되는지 확인
+- [x] 오류 타입과 공개 API 이름 검토
+- [x] no-default/all-features 테스트, clippy와 format 검증
+- [x] 현재 변경을 하나의 집중된 commit으로 정리
 
 완료 조건:
 

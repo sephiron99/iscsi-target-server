@@ -33,9 +33,9 @@ pub use frame::{
     MAX_AHS_LENGTH, MAX_DATA_SEGMENT_LENGTH,
 };
 pub use negotiation::{
-    LoginSide, NegotiatedFrameParameters, NegotiationError, TargetLoginNegotiation,
-    DEFAULT_MAX_LOGIN_TEXT_SEQUENCE_LENGTH, MIN_LOGIN_TEXT_SEQUENCE_LENGTH,
-    MIN_MAX_RECV_DATA_SEGMENT_LENGTH,
+    LoginContinuationError, LoginSide, LoginTransitionError, NegotiatedFrameParameters,
+    NegotiationError, TargetLoginNegotiation, DEFAULT_MAX_LOGIN_TEXT_SEQUENCE_LENGTH,
+    MIN_LOGIN_TEXT_SEQUENCE_LENGTH, MIN_MAX_RECV_DATA_SEGMENT_LENGTH,
 };
 pub use opcode::Opcode;
 
@@ -130,7 +130,7 @@ impl Pdu {
             Opcode::R2t => Pdu::R2t(R2t::decode(&bhs, data)?),
             Opcode::Reject => Pdu::Reject(Reject::decode(&bhs, data)?),
             Opcode::AsyncMessage => {
-                return Err(PduError::Malformed("AsyncMessage not supported".into()))
+                return Err(PduError::UnsupportedOpcode(Opcode::AsyncMessage as u8))
             }
         })
     }
@@ -385,5 +385,16 @@ mod tests {
                 let _ = Pdu::decode(&bhs, Bytes::new());
             }
         }
+    }
+
+    #[test]
+    fn reports_recognized_but_unsupported_opcode_separately() {
+        let mut bhs = [0u8; BHS_LEN];
+        bhs[0] = Opcode::AsyncMessage as u8;
+
+        assert_eq!(
+            Pdu::decode(&bhs, Bytes::new()).unwrap_err(),
+            PduError::UnsupportedOpcode(Opcode::AsyncMessage as u8)
+        );
     }
 }

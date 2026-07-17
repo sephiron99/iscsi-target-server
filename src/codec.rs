@@ -41,16 +41,16 @@ impl IscsiCodec {
         self.frames.config_mut().set_max_ahs_length(len);
     }
 
-    pub fn set_max_recv_data_segment_length(&mut self, len: u32) {
+    pub fn set_max_recv_data_segment_length(&mut self, len: usize) {
         self.frames
             .config_mut()
-            .set_max_recv_data_segment_length(len as usize);
+            .set_max_recv_data_segment_length(len);
     }
 
-    pub fn set_max_send_data_segment_length(&mut self, len: u32) {
+    pub fn set_max_send_data_segment_length(&mut self, len: usize) {
         self.frames
             .config_mut()
-            .set_max_send_data_segment_length(len as usize);
+            .set_max_send_data_segment_length(len);
     }
 
     pub fn apply_negotiated_frame_parameters(&mut self, parameters: NegotiatedFrameParameters) {
@@ -231,10 +231,16 @@ mod tests {
     fn login_result_is_applied_only_on_full_feature_transition() {
         let mut codec = IscsiCodec::new();
         let mut negotiation = TargetLoginNegotiation::new();
+        let initial_config = *codec.frame_config();
         let proposal = login_request(
             false,
             LoginStage::Operational,
             b"HeaderDigest=CRC32C,None\0DataDigest=CRC32C,None\0MaxRecvDataSegmentLength=4096\0",
+        );
+        let invalid_selection = login_response(
+            false,
+            LoginStage::Operational,
+            b"HeaderDigest=CRC32C\0DataDigest=Unsupported\0MaxRecvDataSegmentLength=16384\0",
         );
         let selection = login_response(
             false,
@@ -242,17 +248,21 @@ mod tests {
             b"HeaderDigest=CRC32C\0DataDigest=CRC32C\0MaxRecvDataSegmentLength=16384\0",
         );
 
+        assert!(matches!(
+            codec.observe_target_login_exchange(&mut negotiation, &proposal, &invalid_selection),
+            Err(NegotiationError::DigestNotOffered { .. })
+        ));
+        assert_eq!(*codec.frame_config(), initial_config);
+        assert_eq!(negotiation.parameters(), None);
+
         assert_eq!(
             codec
                 .observe_target_login_exchange(&mut negotiation, &proposal, &selection)
                 .unwrap(),
             None
         );
-        assert_eq!(codec.frame_config().header_digest(), DigestType::None);
-        assert_eq!(
-            codec.frame_config().max_recv_data_segment_length(),
-            crate::DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH
-        );
+        assert_eq!(*codec.frame_config(), initial_config);
+        assert_eq!(negotiation.parameters(), None);
 
         let final_request = login_request(true, LoginStage::FullFeature, b"");
         let final_response = login_response(true, LoginStage::FullFeature, b"");
@@ -262,10 +272,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(completed.header_digest(), DigestType::Crc32c);
-        assert_eq!(codec.frame_config().header_digest(), DigestType::Crc32c);
-        assert_eq!(codec.frame_config().data_digest(), DigestType::Crc32c);
-        assert_eq!(codec.frame_config().max_recv_data_segment_length(), 16384);
-        assert_eq!(codec.frame_config().max_send_data_segment_length(), 4096);
+        let mut expected_config = initial_config;
+        expected_config.set_digests(DigestType::Crc32c, DigestType::Crc32c);
+        expected_config.set_max_recv_data_segment_length(16384);
+        expected_config.set_max_send_data_segment_length(4096);
+        assert_eq!(*codec.frame_config(), expected_config);
 
         let mut wire = BytesMut::new();
         Encoder::encode(&mut codec, nop_out(Bytes::from_static(b"x")), &mut wire).unwrap();

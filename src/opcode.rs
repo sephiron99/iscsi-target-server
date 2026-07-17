@@ -151,7 +151,20 @@ impl TaskMgmtFunction {
             6 => TaskMgmtFunction::TargetWarmReset,
             7 => TaskMgmtFunction::TargetColdReset,
             8 => TaskMgmtFunction::TaskReassign,
-            other => return Err(PduError::Malformed(format!("unknown TMF: {}", other))),
+            other => return Err(PduError::UnknownTaskManagementFunction(other)),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reports_unknown_task_management_function_as_typed_error() {
+        assert_eq!(
+            TaskMgmtFunction::from_byte(0),
+            Err(PduError::UnknownTaskManagementFunction(0))
+        );
     }
 }

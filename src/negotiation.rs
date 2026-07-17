@@ -26,6 +26,57 @@ pub enum LoginSide {
     Target,
 }
 
+/// Reason that a Login stage transition is invalid.
+#[derive(Debug, Clone, Copy, thiserror::Error, PartialEq, Eq)]
+pub enum LoginTransitionError {
+    #[error("Login cannot start in Full Feature Phase")]
+    StartsInFullFeaturePhase,
+
+    #[error("the target cannot transit unless the initiator requested transit")]
+    TransitNotRequested,
+
+    #[error("the target selected {selected:?}, beyond the requested stage {requested:?}")]
+    SelectedStageBeyondRequested {
+        requested: LoginStage,
+        selected: LoginStage,
+    },
+
+    #[error("the transition from {current:?} to {next:?} is not permitted")]
+    StagePairNotPermitted {
+        current: LoginStage,
+        next: LoginStage,
+    },
+
+    #[error("the final Login Request selected {selected:?}, not Full Feature Phase")]
+    FinalRequestDoesNotSelectFullFeaturePhase { selected: LoginStage },
+}
+
+/// Reason that a fragmented Login text sequence is invalid.
+#[derive(Debug, Clone, Copy, thiserror::Error, PartialEq, Eq)]
+pub enum LoginContinuationError {
+    #[error("a Login Request cannot set both C and T")]
+    RequestSetsTransit,
+
+    #[error("a Login Response cannot set both C and T")]
+    ResponseSetsTransit,
+
+    #[error("a target text continuation must be acknowledged by an empty request")]
+    TargetContinuationRequiresEmptyRequest,
+
+    #[error("an initiator text continuation requires an empty response")]
+    InitiatorContinuationRequiresEmptyResponse,
+
+    #[error("Login completed with an unfinished text sequence")]
+    UnfinishedAtLoginCompletion,
+
+    #[error("a {side:?} text sequence crossed Login stages from {previous:?} to {current:?}")]
+    CrossesLoginStages {
+        side: LoginSide,
+        previous: LoginStage,
+        current: LoginStage,
+    },
+}
+
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum NegotiationError {
     #[error("login was rejected with status {status_class:#04x}/{status_detail:#04x}")]
@@ -47,10 +98,10 @@ pub enum NegotiationError {
     },
 
     #[error("invalid Login transition: {0}")]
-    InvalidTransition(&'static str),
+    InvalidTransition(#[source] LoginTransitionError),
 
     #[error("invalid Login continuation: {0}")]
-    InvalidContinuation(&'static str),
+    InvalidContinuation(#[source] LoginContinuationError),
 
     #[error("invalid {side:?} Login text: {source}")]
     InvalidText {
@@ -369,27 +420,30 @@ impl TargetLoginNegotiation {
             }
         } else if request.current_stage == LoginStage::FullFeature {
             return Err(NegotiationError::InvalidTransition(
-                "Login cannot start in Full Feature Phase",
+                LoginTransitionError::StartsInFullFeaturePhase,
             ));
         }
         if request.continue_ && request.transit {
             return Err(NegotiationError::InvalidContinuation(
-                "a Login Request cannot set both C and T",
+                LoginContinuationError::RequestSetsTransit,
             ));
         }
         if response.continue_ && response.transit {
             return Err(NegotiationError::InvalidContinuation(
-                "a Login Response cannot set both C and T",
+                LoginContinuationError::ResponseSetsTransit,
             ));
         }
         if response.transit && !request.transit {
             return Err(NegotiationError::InvalidTransition(
-                "the target cannot transit unless the initiator requested transit",
+                LoginTransitionError::TransitNotRequested,
             ));
         }
         if response.transit && (response.next_stage as u8) > (request.next_stage as u8) {
             return Err(NegotiationError::InvalidTransition(
-                "the target selected a stage beyond the initiator's requested stage",
+                LoginTransitionError::SelectedStageBeyondRequested {
+                    requested: request.next_stage,
+                    selected: response.next_stage,
+                },
             ));
         }
         if response.transit
@@ -401,7 +455,10 @@ impl TargetLoginNegotiation {
             )
         {
             return Err(NegotiationError::InvalidTransition(
-                "the selected stage transition is not permitted",
+                LoginTransitionError::StagePairNotPermitted {
+                    current: response.current_stage,
+                    next: response.next_stage,
+                },
             ));
         }
 
@@ -409,7 +466,7 @@ impl TargetLoginNegotiation {
         if request_is_empty_continuation {
             if !request.params.is_empty() || request.continue_ || request.transit {
                 return Err(NegotiationError::InvalidContinuation(
-                    "a target text continuation must be acknowledged by an empty request",
+                    LoginContinuationError::TargetContinuationRequiresEmptyRequest,
                 ));
             }
             self.target_continuation_pending = false;
@@ -425,7 +482,7 @@ impl TargetLoginNegotiation {
         if request.continue_ {
             if !response.params.is_empty() || response.continue_ || response.transit {
                 return Err(NegotiationError::InvalidContinuation(
-                    "an initiator text continuation requires an empty response",
+                    LoginContinuationError::InitiatorContinuationRequiresEmptyResponse,
                 ));
             }
         } else {
@@ -450,7 +507,9 @@ impl TargetLoginNegotiation {
         }
         if request.next_stage != LoginStage::FullFeature {
             return Err(NegotiationError::InvalidTransition(
-                "final Login Request did not select Full Feature Phase",
+                LoginTransitionError::FinalRequestDoesNotSelectFullFeaturePhase {
+                    selected: request.next_stage,
+                },
             ));
         }
         if !self.initiator_fragment.is_empty()
@@ -458,7 +517,7 @@ impl TargetLoginNegotiation {
             || self.target_continuation_pending
         {
             return Err(NegotiationError::InvalidContinuation(
-                "Login completed with an unfinished text sequence",
+                LoginContinuationError::UnfinishedAtLoginCompletion,
             ));
         }
 
@@ -502,7 +561,11 @@ impl TargetLoginNegotiation {
         if let Some(previous) = *fragment_stage {
             if previous != stage {
                 return Err(NegotiationError::InvalidContinuation(
-                    "a text sequence crossed Login stages",
+                    LoginContinuationError::CrossesLoginStages {
+                        side,
+                        previous,
+                        current: stage,
+                    },
                 ));
             }
         } else {
@@ -852,6 +915,66 @@ mod tests {
     }
 
     #[test]
+    fn preserves_raw_fragments_when_a_completed_sequence_is_retried() {
+        let mut negotiation = TargetLoginNegotiation::new();
+        let first_chunk = b"MaxRecvDataSegment";
+        let partial_request = request(
+            false,
+            true,
+            LoginStage::Operational,
+            LoginStage::Operational,
+            first_chunk,
+        );
+        let empty_response = response(
+            false,
+            false,
+            LoginStage::Operational,
+            LoginStage::Operational,
+            b"",
+        );
+        negotiation
+            .observe_exchange(&partial_request, &empty_response)
+            .unwrap();
+
+        let invalid_final_request = request(
+            true,
+            false,
+            LoginStage::Operational,
+            LoginStage::FullFeature,
+            b"\xffLength=4096\0",
+        );
+        let final_response = response(
+            true,
+            false,
+            LoginStage::Operational,
+            LoginStage::FullFeature,
+            b"",
+        );
+        assert_eq!(
+            negotiation.observe_exchange(&invalid_final_request, &final_response),
+            Err(NegotiationError::InvalidText {
+                side: LoginSide::Initiator,
+                source: TextParameterError::InvalidUtf8 {
+                    offset: first_chunk.len(),
+                },
+            })
+        );
+
+        let valid_final_request = request(
+            true,
+            false,
+            LoginStage::Operational,
+            LoginStage::FullFeature,
+            b"Length=4096\0",
+        );
+        let parameters = negotiation
+            .observe_exchange(&valid_final_request, &final_response)
+            .unwrap()
+            .unwrap();
+        assert_eq!(parameters.peer_max_recv_data_segment_length(), 4096);
+    }
+
+    #[test]
     fn reassembles_target_text_after_empty_continuation_requests() {
         let mut negotiation = TargetLoginNegotiation::new();
         let initial_request = request(
@@ -953,6 +1076,117 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(parameters.header_digest(), DigestType::Crc32c);
+    }
+
+    #[test]
+    fn reports_typed_transition_and_continuation_reasons() {
+        let request_without_transit = request(
+            false,
+            false,
+            LoginStage::Operational,
+            LoginStage::Operational,
+            b"",
+        );
+        let transiting_response = response(
+            true,
+            false,
+            LoginStage::Operational,
+            LoginStage::FullFeature,
+            b"",
+        );
+        assert_eq!(
+            TargetLoginNegotiation::new()
+                .observe_exchange(&request_without_transit, &transiting_response),
+            Err(NegotiationError::InvalidTransition(
+                LoginTransitionError::TransitNotRequested,
+            ))
+        );
+
+        let invalid_continuation = request(
+            true,
+            true,
+            LoginStage::Operational,
+            LoginStage::FullFeature,
+            b"",
+        );
+        let response = response(
+            false,
+            false,
+            LoginStage::Operational,
+            LoginStage::Operational,
+            b"",
+        );
+        assert_eq!(
+            TargetLoginNegotiation::new().observe_exchange(&invalid_continuation, &response),
+            Err(NegotiationError::InvalidContinuation(
+                LoginContinuationError::RequestSetsTransit,
+            ))
+        );
+    }
+
+    #[test]
+    fn enforces_stage_boundaries_without_consuming_valid_state() {
+        let mut negotiation = TargetLoginNegotiation::new();
+        let security_request = request(
+            true,
+            false,
+            LoginStage::Security,
+            LoginStage::Operational,
+            b"AuthMethod=None\0",
+        );
+        let operational_response = response(
+            true,
+            false,
+            LoginStage::Security,
+            LoginStage::Operational,
+            b"AuthMethod=None\0",
+        );
+        negotiation
+            .observe_exchange(&security_request, &operational_response)
+            .unwrap();
+
+        let stale_request = request(
+            false,
+            false,
+            LoginStage::Security,
+            LoginStage::Security,
+            b"",
+        );
+        let stale_response = response(
+            false,
+            false,
+            LoginStage::Security,
+            LoginStage::Security,
+            b"",
+        );
+        assert_eq!(
+            negotiation.observe_exchange(&stale_request, &stale_response),
+            Err(NegotiationError::UnexpectedStage {
+                expected: LoginStage::Operational,
+                actual: LoginStage::Security,
+            })
+        );
+
+        let final_request = request(
+            true,
+            false,
+            LoginStage::Operational,
+            LoginStage::FullFeature,
+            b"",
+        );
+        let final_response = response(
+            true,
+            false,
+            LoginStage::Operational,
+            LoginStage::FullFeature,
+            b"",
+        );
+        assert_eq!(
+            negotiation
+                .observe_exchange(&final_request, &final_response)
+                .unwrap(),
+            Some(NegotiatedFrameParameters::default())
+        );
     }
 
     #[test]
