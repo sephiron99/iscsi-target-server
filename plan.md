@@ -61,18 +61,18 @@
 
 ## 3. 인증, Connection과 Session 상태
 
-- [ ] 인증 없음과 단방향 CHAP 정책 지원
-- [ ] 검증된 암호 primitive 사용, secret 비노출과 필요한 constant-time 비교
-- [ ] Connection 상태 머신 구현
+- [x] 인증 없음과 단방향 CHAP 정책 지원
+- [x] 검증된 암호 primitive 사용, secret 비노출과 필요한 constant-time 비교
+- [x] Connection 상태 머신 구현
   - SecurityNegotiation
   - LoginOperationalNegotiation
   - FullFeaturePhase
   - Logout/Closed
-- [ ] ISID, TSIH, CID와 connection reinstatement 규칙
-- [ ] Session 생성, 조회, 종료와 자원 상한
-- [ ] `CmdSN`, `ExpCmdSN`, `MaxCmdSN`, `StatSN`, `ExpStatSN` 관리
-- [ ] serial number wraparound 비교와 command window 검증
-- [ ] timeout, protocol error와 transport error에 따른 종료 정책
+- [x] ISID, TSIH, CID와 connection reinstatement 규칙
+- [x] Session 생성, 조회, 종료와 자원 상한
+- [x] `CmdSN`, `ExpCmdSN`, `MaxCmdSN`, `StatSN`, `ExpStatSN` 관리
+- [x] serial number wraparound 비교와 command window 검증
+- [x] timeout, protocol error와 transport error에 따른 종료 정책
 
 완료 조건:
 

@@ -86,7 +86,7 @@ pub enum AuthMethodError {
 }
 
 /// RFC 7143 13.21절의 SessionType 값.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum SessionType {
     Discovery,
     #[default]

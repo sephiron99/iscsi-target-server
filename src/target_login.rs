@@ -5,9 +5,11 @@
 //! 포함된 frame parameter를 실제 codec에 적용한다.
 
 use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
 
 use bytes::Bytes;
 
+use crate::auth::{ChapCredentials, ChapExchange};
 use crate::digest::DigestType;
 use crate::frame::FrameConfig;
 use crate::login::{
@@ -60,6 +62,7 @@ pub struct TargetLoginProcessor {
     first_complete_request_seen: bool,
     pending_response: VecDeque<Bytes>,
     seen_operational_keys: HashSet<String>,
+    chap: Option<ChapExchange>,
     negotiated_max_burst_length: u32,
     negotiated_first_burst_length: u32,
     finished: bool,
@@ -77,10 +80,21 @@ impl TargetLoginProcessor {
             first_complete_request_seen: false,
             pending_response: VecDeque::new(),
             seen_operational_keys: HashSet::new(),
+            chap: None,
             negotiated_max_burst_length,
             negotiated_first_burst_length,
             finished: false,
         }
+    }
+
+    pub fn with_chap_credentials(
+        policy: TargetLoginPolicy,
+        tsih: u16,
+        credentials: ChapCredentials,
+    ) -> Self {
+        let mut processor = Self::new(policy, tsih);
+        processor.chap = Some(ChapExchange::new(Arc::new(credentials)));
+        processor
     }
 
     pub fn handle_request(
@@ -242,6 +256,18 @@ impl TargetLoginProcessor {
             .transpose()
             .map_err(|_| LOGIN_STATUS_INVALID_REQUEST)?
             .unwrap_or_else(|| self.negotiation.session_type());
+        let chap_name = request.get("CHAP_N");
+        let chap_response = request.get("CHAP_R");
+        if chap_name.is_some() != chap_response.is_some() {
+            return Err(LOGIN_STATUS_AUTHENTICATION_FAILURE);
+        }
+        if let (Some(name), Some(encoded_response)) = (chap_name, chap_response) {
+            self.chap
+                .as_mut()
+                .ok_or(LOGIN_STATUS_AUTHENTICATION_FAILURE)?
+                .verify(name, encoded_response)
+                .map_err(|_| LOGIN_STATUS_AUTHENTICATION_FAILURE)?;
+        }
         for (key, value) in request.iter() {
             if !packet_keys.insert(key) {
                 return Err(LOGIN_STATUS_INVALID_REQUEST);
@@ -251,9 +277,29 @@ impl TargetLoginProcessor {
                 "AuthMethod" if stage == LoginStage::Security => {
                     let selected = select_auth(value, self.policy.authentication().methods())
                         .ok_or(LOGIN_STATUS_AUTHENTICATION_FAILURE)?;
+                    if selected == AuthMethod::Chap && self.chap.is_none() {
+                        return Err(LOGIN_STATUS_AUTHENTICATION_FAILURE);
+                    }
                     response.push(key, selected.as_str());
                 }
                 "AuthMethod" => return Err(LOGIN_STATUS_INVALID_REQUEST),
+                "CHAP_A" if stage == LoginStage::Security => {
+                    let challenge = self
+                        .chap
+                        .as_mut()
+                        .ok_or(LOGIN_STATUS_AUTHENTICATION_FAILURE)?
+                        .challenge(value)
+                        .map_err(|_| LOGIN_STATUS_AUTHENTICATION_FAILURE)?;
+                    for (challenge_key, challenge_value) in challenge.iter() {
+                        response.push(challenge_key, challenge_value);
+                    }
+                }
+                "CHAP_N" | "CHAP_R" if stage == LoginStage::Security => {}
+                // 단방향 CHAP 정책이므로 target 인증 요구는 명시적으로 거부한다.
+                "CHAP_I" | "CHAP_C" if stage == LoginStage::Security => {
+                    return Err(LOGIN_STATUS_AUTHENTICATION_FAILURE)
+                }
+                key if key.starts_with("CHAP_") => return Err(LOGIN_STATUS_INVALID_REQUEST),
                 _ if stage != LoginStage::Operational => {
                     response.push(key, "NotUnderstood");
                 }
@@ -364,6 +410,14 @@ impl TargetLoginProcessor {
         match selected {
             AuthMethod::None => Ok(()),
             // CHAP credential exchange는 다음 이정표에서 이 상태를 해제한다.
+            AuthMethod::Chap
+                if self
+                    .chap
+                    .as_ref()
+                    .is_some_and(ChapExchange::is_authenticated) =>
+            {
+                Ok(())
+            }
             _ => Err(LOGIN_STATUS_AUTHENTICATION_FAILURE),
         }
     }
@@ -574,6 +628,7 @@ fn is_operational_key(key: &str) -> bool {
 mod tests {
     use super::*;
     use crate::Pdu;
+    use md5::{Digest, Md5};
 
     const INITIATOR: &str = "iqn.2024-01.com.example:initiator";
     const TARGET: &str = "iqn.2024-01.com.example:target";
@@ -854,5 +909,79 @@ mod tests {
             ),
             LOGIN_STATUS_AUTHENTICATION_FAILURE
         );
+    }
+
+    #[test]
+    fn one_way_chap_authenticates_before_stage_transition() {
+        let mut policy = normal_policy();
+        policy.set_authentication(crate::login_policy::AuthenticationPolicy::ChapOnly);
+        let credentials =
+            ChapCredentials::new("chap-user".to_owned(), b"chap-secret".to_vec()).unwrap();
+        let mut processor = TargetLoginProcessor::with_chap_credentials(policy, 1, credentials);
+
+        let identity = format!("InitiatorName={INITIATOR}\0TargetName={TARGET}\0AuthMethod=CHAP\0");
+        let mut select = request(
+            LoginStage::Security,
+            LoginStage::Security,
+            identity.as_bytes(),
+            1,
+        );
+        select.transit = false;
+        assert_eq!(
+            processor
+                .handle_request(&select)
+                .unwrap()
+                .response
+                .params
+                .get("AuthMethod"),
+            Some("CHAP")
+        );
+
+        let mut algorithm = request(LoginStage::Security, LoginStage::Security, b"CHAP_A=5\0", 1);
+        algorithm.transit = false;
+        let challenge = processor.handle_request(&algorithm).unwrap().response;
+        let identifier: u8 = challenge.params.get("CHAP_I").unwrap().parse().unwrap();
+        let encoded_challenge = challenge.params.get("CHAP_C").unwrap();
+        let challenge_bytes = encoded_challenge
+            .strip_prefix("0x")
+            .unwrap()
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                let text = std::str::from_utf8(pair).unwrap();
+                u8::from_str_radix(text, 16).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut hasher = Md5::new();
+        hasher.update([identifier]);
+        hasher.update(b"chap-secret");
+        hasher.update(&challenge_bytes);
+        let digest = hasher.finalize();
+        let response = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let proof = format!("CHAP_N=chap-user\0CHAP_R=0x{response}\0");
+        let authenticated = processor
+            .handle_request(&request(
+                LoginStage::Security,
+                LoginStage::Operational,
+                proof.as_bytes(),
+                1,
+            ))
+            .unwrap();
+        assert!(authenticated.response.transit);
+        assert_eq!(authenticated.response.status_class, 0);
+
+        let completed = processor
+            .handle_request(&request(
+                LoginStage::Operational,
+                LoginStage::FullFeature,
+                b"",
+                1,
+            ))
+            .unwrap();
+        assert!(completed.response.transit);
+        assert!(completed.frame_parameters().is_some());
     }
 }

@@ -11,7 +11,9 @@
 //   │ Bhs ([u8; 48])                            │  ← 저수준 word 접근
 //   └─────────────────────────────────────────┘
 
+pub mod auth;
 pub mod bhs;
+pub mod connection;
 pub mod control;
 pub mod digest;
 pub mod error;
@@ -21,14 +23,25 @@ pub mod login_policy;
 pub mod negotiation;
 pub mod opcode;
 pub mod scsi;
+pub mod serial;
+pub mod session;
 pub mod target_login;
 
 // codec은 tokio-util 의존성이 필요하므로 feature로 분리.
 // 순수 PDU 파싱/직렬화만 쓰는 경우 Tokio 의존성 없이 사용 가능.
 #[cfg(feature = "codec")]
 pub mod codec;
+#[cfg(feature = "codec")]
+pub mod connection_io;
 
+pub use auth::{ChapCredentials, ChapError, ChapExchange};
 pub use bhs::{Bhs, BHS_LEN};
+pub use connection::{
+    ConnectionCloseReason, ConnectionError, ConnectionOutput, ConnectionPhase,
+    ConnectionStateMachine, ConnectionTimeoutKind, ConnectionTimeouts,
+};
+#[cfg(feature = "codec")]
+pub use connection_io::{run_connection, ConnectionIoError};
 pub use error::{CodecError, FrameError, PduError};
 pub use frame::{
     FrameCodec, FrameConfig, PduFrame, RawFrame, DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH,
@@ -47,6 +60,11 @@ pub use negotiation::{
     MIN_LOGIN_TEXT_SEQUENCE_LENGTH, MIN_MAX_RECV_DATA_SEGMENT_LENGTH,
 };
 pub use opcode::Opcode;
+pub use serial::{SequenceError, SequenceState, SerialNumber32};
+pub use session::{
+    Session, SessionBinding, SessionError, SessionId, SessionIdentity, SessionRegistry,
+    SessionRegistryLimits,
+};
 pub use target_login::{TargetLoginError, TargetLoginOutcome, TargetLoginProcessor};
 
 use bytes::{BufMut, Bytes, BytesMut};
