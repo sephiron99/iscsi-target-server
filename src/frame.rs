@@ -14,9 +14,10 @@ use crate::{Opcode, Pdu, BHS_LEN};
 pub const MAX_AHS_LENGTH: usize = (u8::MAX as usize) * 4;
 /// Largest data segment representable by the 24-bit DataSegmentLength field.
 pub const MAX_DATA_SEGMENT_LENGTH: usize = 0x00ff_ffff;
+/// RFC 7143 default for each endpoint's MaxRecvDataSegmentLength declaration.
+pub const DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH: usize = 8192;
 
 const DIGEST_LEN: usize = 4;
-const DEFAULT_MAX_DATA_SEGMENT_LENGTH: usize = 256 * 1024;
 
 #[inline]
 const fn padding_len(len: usize) -> usize {
@@ -47,7 +48,8 @@ pub struct FrameConfig {
     header_digest: DigestType,
     data_digest: DigestType,
     max_ahs_length: usize,
-    max_data_segment_length: usize,
+    max_recv_data_segment_length: usize,
+    max_send_data_segment_length: usize,
 }
 
 impl FrameConfig {
@@ -67,8 +69,14 @@ impl FrameConfig {
         self.max_ahs_length
     }
 
-    pub fn max_data_segment_length(&self) -> usize {
-        self.max_data_segment_length
+    /// Largest data segment accepted by the decoder from the peer.
+    pub fn max_recv_data_segment_length(&self) -> usize {
+        self.max_recv_data_segment_length
+    }
+
+    /// Largest data segment emitted by the encoder for the peer.
+    pub fn max_send_data_segment_length(&self) -> usize {
+        self.max_send_data_segment_length
     }
 
     pub fn set_digests(&mut self, header: DigestType, data: DigestType) {
@@ -80,12 +88,16 @@ impl FrameConfig {
         self.max_ahs_length = len.min(MAX_AHS_LENGTH);
     }
 
-    pub fn set_max_data_segment_length(&mut self, len: usize) {
-        self.max_data_segment_length = len.min(MAX_DATA_SEGMENT_LENGTH);
+    pub fn set_max_recv_data_segment_length(&mut self, len: usize) {
+        self.max_recv_data_segment_length = len.min(MAX_DATA_SEGMENT_LENGTH);
+    }
+
+    pub fn set_max_send_data_segment_length(&mut self, len: usize) {
+        self.max_send_data_segment_length = len.min(MAX_DATA_SEGMENT_LENGTH);
     }
 
     fn digest_lengths(&self, bhs: &[u8; BHS_LEN], data_len: usize) -> (usize, usize) {
-        // HeaderDigest/DataDigest negotiation takes effect after Login Phase.
+        // Login Request/Response formats do not carry negotiated digests.
         if is_login_pdu(bhs) {
             return (0, 0);
         }
@@ -106,7 +118,8 @@ impl Default for FrameConfig {
             header_digest: DigestType::None,
             data_digest: DigestType::None,
             max_ahs_length: MAX_AHS_LENGTH,
-            max_data_segment_length: DEFAULT_MAX_DATA_SEGMENT_LENGTH,
+            max_recv_data_segment_length: DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH,
+            max_send_data_segment_length: DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH,
         }
     }
 }
@@ -215,7 +228,7 @@ impl FrameCodec {
 
         let ahs_len = ahs_length(&bhs);
         let data_len = data_segment_length(&bhs);
-        self.validate_lengths(ahs_len, data_len)?;
+        self.validate_lengths(ahs_len, data_len, self.config.max_recv_data_segment_length)?;
 
         let (header_digest_len, data_digest_len) = self.config.digest_lengths(&bhs, data_len);
         let data_padding_len = padding_len(data_len);
@@ -301,17 +314,22 @@ impl FrameCodec {
         Ok(())
     }
 
-    fn validate_lengths(&self, ahs_len: usize, data_len: usize) -> Result<(), FrameError> {
+    fn validate_lengths(
+        &self,
+        ahs_len: usize,
+        data_len: usize,
+        max_data_segment_length: usize,
+    ) -> Result<(), FrameError> {
         if ahs_len > self.config.max_ahs_length {
             return Err(FrameError::AhsTooLarge {
                 len: ahs_len,
                 max: self.config.max_ahs_length,
             });
         }
-        if data_len > self.config.max_data_segment_length {
+        if data_len > max_data_segment_length {
             return Err(FrameError::DataSegmentTooLarge {
                 len: data_len,
-                max: self.config.max_data_segment_length,
+                max: max_data_segment_length,
             });
         }
         Ok(())
@@ -323,7 +341,11 @@ impl FrameCodec {
                 len: frame.ahs.len(),
             });
         }
-        self.validate_lengths(frame.ahs.len(), frame.data.len())?;
+        self.validate_lengths(
+            frame.ahs.len(),
+            frame.data.len(),
+            self.config.max_send_data_segment_length,
+        )?;
 
         let declared_ahs = ahs_length(&frame.bhs);
         if declared_ahs != frame.ahs.len() {
@@ -435,7 +457,7 @@ mod tests {
     fn rejects_lengths_before_waiting_for_or_allocating_payload() {
         let mut config = FrameConfig::default();
         config.set_max_ahs_length(4);
-        config.set_max_data_segment_length(4);
+        config.set_max_recv_data_segment_length(4);
         let codec = FrameCodec::new(config);
 
         let mut excessive_ahs = BytesMut::zeroed(BHS_LEN);
@@ -502,9 +524,34 @@ mod tests {
     fn configured_limits_are_capped_by_wire_field_widths() {
         let mut config = FrameConfig::default();
         config.set_max_ahs_length(usize::MAX);
-        config.set_max_data_segment_length(usize::MAX);
+        config.set_max_recv_data_segment_length(usize::MAX);
+        config.set_max_send_data_segment_length(usize::MAX);
         assert_eq!(config.max_ahs_length(), MAX_AHS_LENGTH);
-        assert_eq!(config.max_data_segment_length(), MAX_DATA_SEGMENT_LENGTH);
+        assert_eq!(
+            config.max_recv_data_segment_length(),
+            MAX_DATA_SEGMENT_LENGTH
+        );
+        assert_eq!(
+            config.max_send_data_segment_length(),
+            MAX_DATA_SEGMENT_LENGTH
+        );
+    }
+
+    #[test]
+    fn receive_and_send_limits_are_directional() {
+        let mut config = FrameConfig::default();
+        config.set_max_recv_data_segment_length(4);
+        config.set_max_send_data_segment_length(8);
+        let codec = FrameCodec::new(config);
+
+        let outbound = raw_frame(Opcode::NopOut, b"", b"12345");
+        let mut wire = BytesMut::new();
+        codec.encode(&outbound, &mut wire).unwrap();
+
+        assert_eq!(
+            codec.decode(&mut wire),
+            Err(FrameError::DataSegmentTooLarge { len: 5, max: 4 })
+        );
     }
 
     #[test]

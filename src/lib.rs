@@ -17,6 +17,7 @@ pub mod digest;
 pub mod error;
 pub mod frame;
 pub mod login;
+pub mod negotiation;
 pub mod opcode;
 pub mod scsi;
 
@@ -27,7 +28,15 @@ pub mod codec;
 
 pub use bhs::{Bhs, BHS_LEN};
 pub use error::{CodecError, FrameError, PduError};
-pub use frame::{FrameCodec, FrameConfig, PduFrame, RawFrame};
+pub use frame::{
+    FrameCodec, FrameConfig, PduFrame, RawFrame, DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH,
+    MAX_AHS_LENGTH, MAX_DATA_SEGMENT_LENGTH,
+};
+pub use negotiation::{
+    LoginSide, NegotiatedFrameParameters, NegotiationError, TargetLoginNegotiation,
+    DEFAULT_MAX_LOGIN_TEXT_SEQUENCE_LENGTH, MIN_LOGIN_TEXT_SEQUENCE_LENGTH,
+    MIN_MAX_RECV_DATA_SEGMENT_LENGTH,
+};
 pub use opcode::Opcode;
 
 use bytes::{BufMut, Bytes, BytesMut};

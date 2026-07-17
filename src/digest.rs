@@ -37,13 +37,17 @@ pub enum DigestType {
     Crc32c,
 }
 
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+#[error("unsupported digest value {0:?}")]
+pub struct ParseDigestError(String);
+
 impl DigestType {
-    /// 협상 문자열 파싱 ("None" / "CRC32C")
-    pub fn from_text_value(s: &str) -> Self {
-        if s.eq_ignore_ascii_case("CRC32C") {
-            DigestType::Crc32c
-        } else {
-            DigestType::None
+    /// Parse the case-sensitive RFC 7143 negotiation value.
+    pub fn from_text_value(s: &str) -> Result<Self, ParseDigestError> {
+        match s {
+            "None" => Ok(DigestType::None),
+            "CRC32C" => Ok(DigestType::Crc32c),
+            _ => Err(ParseDigestError(s.to_owned())),
         }
     }
 
@@ -98,9 +102,15 @@ mod tests {
 
     #[test]
     fn test_digest_type_parse() {
-        assert_eq!(DigestType::from_text_value("CRC32C"), DigestType::Crc32c);
-        assert_eq!(DigestType::from_text_value("crc32c"), DigestType::Crc32c);
-        assert_eq!(DigestType::from_text_value("None"), DigestType::None);
+        assert_eq!(
+            DigestType::from_text_value("CRC32C"),
+            Ok(DigestType::Crc32c)
+        );
+        assert_eq!(DigestType::from_text_value("None"), Ok(DigestType::None));
+        assert_eq!(
+            DigestType::from_text_value("crc32c"),
+            Err(ParseDigestError("crc32c".to_owned()))
+        );
         assert_eq!(DigestType::Crc32c.wire_len(), 4);
     }
 }

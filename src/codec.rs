@@ -6,6 +6,8 @@ use tokio_util::codec::{Decoder, Encoder};
 use crate::digest::DigestType;
 use crate::error::CodecError;
 use crate::frame::{FrameCodec, FrameConfig, PduFrame, RawFrame};
+use crate::login::{LoginRequest, LoginResponse};
+use crate::negotiation::{NegotiatedFrameParameters, NegotiationError, TargetLoginNegotiation};
 use crate::Pdu;
 
 /// Converts a Tokio byte stream into typed iSCSI PDUs while preserving AHS.
@@ -42,7 +44,35 @@ impl IscsiCodec {
     pub fn set_max_recv_data_segment_length(&mut self, len: u32) {
         self.frames
             .config_mut()
-            .set_max_data_segment_length(len as usize);
+            .set_max_recv_data_segment_length(len as usize);
+    }
+
+    pub fn set_max_send_data_segment_length(&mut self, len: u32) {
+        self.frames
+            .config_mut()
+            .set_max_send_data_segment_length(len as usize);
+    }
+
+    pub fn apply_negotiated_frame_parameters(&mut self, parameters: NegotiatedFrameParameters) {
+        parameters.apply_to(self.frames.config_mut());
+    }
+
+    /// Record a target-side Login exchange and atomically activate its result.
+    ///
+    /// Call this after the corresponding Login Response has been queued. The
+    /// codec remains on its prior settings until a successful response enters
+    /// Full Feature Phase.
+    pub fn observe_target_login_exchange(
+        &mut self,
+        negotiation: &mut TargetLoginNegotiation,
+        request: &LoginRequest,
+        response: &LoginResponse,
+    ) -> Result<Option<NegotiatedFrameParameters>, NegotiationError> {
+        let completed = negotiation.observe_exchange(request, response)?;
+        if let Some(parameters) = completed {
+            self.apply_negotiated_frame_parameters(parameters);
+        }
+        Ok(completed)
     }
 }
 
@@ -98,6 +128,8 @@ impl Encoder<RawFrame> for IscsiCodec {
 mod tests {
     use super::*;
     use crate::control::NopOut;
+    use crate::login::TextParameters;
+    use crate::opcode::LoginStage;
 
     fn nop_out(data: Bytes) -> Pdu {
         Pdu::NopOut(NopOut {
@@ -108,6 +140,44 @@ mod tests {
             exp_stat_sn: 13,
             data,
         })
+    }
+
+    fn login_request(transit: bool, next_stage: LoginStage, text: &[u8]) -> LoginRequest {
+        LoginRequest {
+            transit,
+            continue_: false,
+            current_stage: LoginStage::Operational,
+            next_stage,
+            version_max: 0,
+            version_min: 0,
+            isid: [0x80, 1, 2, 3, 4, 5],
+            tsih: 0,
+            initiator_task_tag: 1,
+            cid: 0,
+            cmd_sn: 1,
+            exp_stat_sn: 0,
+            params: TextParameters::parse(text),
+        }
+    }
+
+    fn login_response(transit: bool, next_stage: LoginStage, text: &[u8]) -> LoginResponse {
+        LoginResponse {
+            transit,
+            continue_: false,
+            current_stage: LoginStage::Operational,
+            next_stage,
+            version_max: 0,
+            version_active: 0,
+            isid: [0x80, 1, 2, 3, 4, 5],
+            tsih: 1,
+            initiator_task_tag: 1,
+            stat_sn: 1,
+            exp_cmd_sn: 2,
+            max_cmd_sn: 3,
+            status_class: 0,
+            status_detail: 0,
+            params: TextParameters::parse(text),
+        }
     }
 
     #[test]
@@ -155,5 +225,50 @@ mod tests {
         let mut truncated = BytesMut::from(&[0u8; 47][..]);
         let error = Decoder::decode_eof(&mut codec, &mut truncated).unwrap_err();
         assert!(matches!(error, CodecError::Io(_)));
+    }
+
+    #[test]
+    fn login_result_is_applied_only_on_full_feature_transition() {
+        let mut codec = IscsiCodec::new();
+        let mut negotiation = TargetLoginNegotiation::new();
+        let proposal = login_request(
+            false,
+            LoginStage::Operational,
+            b"HeaderDigest=CRC32C,None\0DataDigest=CRC32C,None\0MaxRecvDataSegmentLength=4096\0",
+        );
+        let selection = login_response(
+            false,
+            LoginStage::Operational,
+            b"HeaderDigest=CRC32C\0DataDigest=CRC32C\0MaxRecvDataSegmentLength=16384\0",
+        );
+
+        assert_eq!(
+            codec
+                .observe_target_login_exchange(&mut negotiation, &proposal, &selection)
+                .unwrap(),
+            None
+        );
+        assert_eq!(codec.frame_config().header_digest(), DigestType::None);
+        assert_eq!(
+            codec.frame_config().max_recv_data_segment_length(),
+            crate::DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH
+        );
+
+        let final_request = login_request(true, LoginStage::FullFeature, b"");
+        let final_response = login_response(true, LoginStage::FullFeature, b"");
+        let completed = codec
+            .observe_target_login_exchange(&mut negotiation, &final_request, &final_response)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(completed.header_digest(), DigestType::Crc32c);
+        assert_eq!(codec.frame_config().header_digest(), DigestType::Crc32c);
+        assert_eq!(codec.frame_config().data_digest(), DigestType::Crc32c);
+        assert_eq!(codec.frame_config().max_recv_data_segment_length(), 16384);
+        assert_eq!(codec.frame_config().max_send_data_segment_length(), 4096);
+
+        let mut wire = BytesMut::new();
+        Encoder::encode(&mut codec, nop_out(Bytes::from_static(b"x")), &mut wire).unwrap();
+        assert_eq!(wire.len(), 48 + 4 + 4 + 4);
     }
 }

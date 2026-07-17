@@ -21,18 +21,46 @@ use bytes::{BufMut, Bytes, BytesMut};
 // Login/Text PDU의 data segment 형식: "key=value\0key=value\0..."
 // 순서가 의미를 가질 수 있으므로 Vec로 유지 (HashMap 아님)
 
-#[derive(Debug, Clone, Default)]
-pub struct TextParameters(pub Vec<(String, String)>);
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TextParameters {
+    entries: Vec<(String, String)>,
+    encoded: Bytes,
+}
+
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum TextParameterError {
+    #[error("text parameter sequence is not NUL-terminated")]
+    MissingTerminator,
+
+    #[error("empty text parameter at byte offset {offset}")]
+    EmptyEntry { offset: usize },
+
+    #[error("text parameter at byte offset {offset} is missing '='")]
+    MissingEquals { offset: usize },
+
+    #[error("text parameter key at byte offset {offset} is empty")]
+    EmptyKey { offset: usize },
+
+    #[error("text parameter contains invalid UTF-8 at byte offset {offset}")]
+    InvalidUtf8 { offset: usize },
+}
 
 impl TextParameters {
     pub fn new() -> Self {
-        Self(Vec::new())
+        Self::default()
     }
 
-    /// data segment 바이트에서 파싱
+    /// Parse a data segment while preserving its exact wire bytes.
+    ///
+    /// The structured view is intentionally permissive because a Login/Text
+    /// PDU with the Continue bit may end in the middle of a key-value pair.
     pub fn parse(data: &[u8]) -> Self {
+        Self::from_bytes(Bytes::copy_from_slice(data))
+    }
+
+    pub fn from_bytes(encoded: Bytes) -> Self {
         let mut pairs = Vec::new();
-        for entry in data.split(|&b| b == 0) {
+        for entry in encoded.split(|&b| b == 0) {
             if entry.is_empty() {
                 continue;
             }
@@ -42,30 +70,89 @@ impl TextParameters {
                 pairs.push((key, value));
             }
         }
-        Self(pairs)
+        Self {
+            entries: pairs,
+            encoded,
+        }
     }
 
-    /// data segment 바이트로 직렬화
-    pub fn encode(&self) -> Bytes {
-        let mut buf = BytesMut::new();
-        for (key, value) in &self.0 {
-            buf.extend_from_slice(key.as_bytes());
-            buf.put_u8(b'=');
-            buf.extend_from_slice(value.as_bytes());
-            buf.put_u8(0);
+    /// Strictly parse one complete NUL-terminated negotiation sequence.
+    pub fn parse_complete(data: &[u8]) -> Result<Self, TextParameterError> {
+        Self::from_complete_bytes(Bytes::copy_from_slice(data))
+    }
+
+    pub(crate) fn from_complete_bytes(encoded: Bytes) -> Result<Self, TextParameterError> {
+        if encoded.is_empty() {
+            return Ok(Self::new());
         }
-        buf.freeze()
+        if encoded.last() != Some(&0) {
+            return Err(TextParameterError::MissingTerminator);
+        }
+
+        let mut entries = Vec::new();
+        let mut offset = 0;
+        for entry in encoded[..encoded.len() - 1].split(|&byte| byte == 0) {
+            if entry.is_empty() {
+                return Err(TextParameterError::EmptyEntry { offset });
+            }
+            let text =
+                std::str::from_utf8(entry).map_err(|error| TextParameterError::InvalidUtf8 {
+                    offset: offset + error.valid_up_to(),
+                })?;
+            let Some(equals) = text.find('=') else {
+                return Err(TextParameterError::MissingEquals { offset });
+            };
+            if equals == 0 {
+                return Err(TextParameterError::EmptyKey { offset });
+            }
+            entries.push((text[..equals].to_owned(), text[equals + 1..].to_owned()));
+            offset += entry.len() + 1;
+        }
+
+        Ok(Self { entries, encoded })
+    }
+
+    /// Return the exact data-segment bytes, including any partial entry.
+    pub fn encode(&self) -> Bytes {
+        self.encoded.clone()
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.encoded
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.encoded.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.entries
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {
-        self.0
+        self.entries
             .iter()
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.as_str())
     }
 
     pub fn push(&mut self, key: &str, value: &str) {
-        self.0.push((key.to_string(), value.to_string()));
+        let terminate_partial = !self.encoded.is_empty() && self.encoded.last() != Some(&0);
+        let mut encoded = BytesMut::with_capacity(
+            self.encoded.len() + key.len() + value.len() + 2 + usize::from(terminate_partial),
+        );
+        encoded.extend_from_slice(&self.encoded);
+        if terminate_partial {
+            encoded.put_u8(0);
+        }
+        encoded.extend_from_slice(key.as_bytes());
+        encoded.put_u8(b'=');
+        encoded.extend_from_slice(value.as_bytes());
+        encoded.put_u8(0);
+        self.encoded = encoded.freeze();
+        self.entries.push((key.to_owned(), value.to_owned()));
     }
 }
 
@@ -109,7 +196,7 @@ impl LoginRequest {
             cid: bhs.get_u16(20),
             cmd_sn: bhs.get_u32(24),
             exp_stat_sn: bhs.get_u32(28),
-            params: TextParameters::parse(&data),
+            params: TextParameters::from_bytes(data),
         })
     }
 
@@ -173,7 +260,7 @@ impl LoginResponse {
             max_cmd_sn: bhs.get_u32(32),
             status_class: bhs.get_u8(36),
             status_detail: bhs.get_u8(37),
-            params: TextParameters::parse(&data),
+            params: TextParameters::from_bytes(data),
         })
     }
 
@@ -242,6 +329,36 @@ mod tests {
         assert_eq!(
             decoded.get("InitiatorName"),
             Some("iqn.2024-01.com.example:host")
+        );
+    }
+
+    #[test]
+    fn text_params_preserve_a_partial_wire_entry() {
+        let partial = b"HeaderDigest=CRC";
+        let params = TextParameters::parse(partial);
+
+        assert_eq!(params.as_bytes(), partial);
+        assert_eq!(params.encode(), Bytes::from_static(partial));
+        assert_eq!(params.get("HeaderDigest"), Some("CRC"));
+        assert_eq!(
+            TextParameters::parse_complete(partial),
+            Err(TextParameterError::MissingTerminator)
+        );
+    }
+
+    #[test]
+    fn complete_text_parser_rejects_malformed_entries() {
+        assert_eq!(
+            TextParameters::parse_complete(b"HeaderDigest\0"),
+            Err(TextParameterError::MissingEquals { offset: 0 })
+        );
+        assert_eq!(
+            TextParameters::parse_complete(b"=CRC32C\0"),
+            Err(TextParameterError::EmptyKey { offset: 0 })
+        );
+        assert_eq!(
+            TextParameters::parse_complete(b"Key=ok\0\xff=x\0"),
+            Err(TextParameterError::InvalidUtf8 { offset: 7 })
         );
     }
 

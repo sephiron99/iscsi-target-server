@@ -193,7 +193,7 @@ impl TextRequest {
             target_transfer_tag: bhs.get_u32(20),
             cmd_sn: bhs.get_u32(24),
             exp_stat_sn: bhs.get_u32(28),
-            params: TextParameters::parse(&data),
+            params: TextParameters::from_bytes(data),
         })
     }
 
@@ -234,7 +234,7 @@ impl TextResponse {
             stat_sn: bhs.get_u32(24),
             exp_cmd_sn: bhs.get_u32(28),
             max_cmd_sn: bhs.get_u32(32),
-            params: TextParameters::parse(&data),
+            params: TextParameters::from_bytes(data),
         })
     }
 
