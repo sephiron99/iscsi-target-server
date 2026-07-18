@@ -1,29 +1,115 @@
 //! 선택적 Tokio stream adapter for [`ConnectionStateMachine`].
 
+use std::sync::Arc;
+
 use bytes::BytesMut;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::codec::IscsiCodec;
+pub use crate::config::DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS;
 use crate::connection::{
     ConnectionCloseReason, ConnectionError, ConnectionPhase, ConnectionStateMachine,
     ConnectionTimeoutKind,
 };
 use crate::error::CodecError;
+use crate::frame::FrameConfig;
+use crate::{Pdu, BHS_LEN};
+
+const READ_CHUNK_LENGTH: usize = 8192;
+
+#[derive(Debug, Clone)]
+/// 동기 backend 작업을 Tokio blocking pool로 보내고 service 전체 동시 실행 수를 제한한다.
+/// 시작된 `spawn_blocking` 작업은 취소할 수 없으므로 graceful shutdown은 permit 회수와
+/// 진행 중 작업의 완료를 별도로 기다려야 한다.
+pub struct BlockingStorageExecutor {
+    permits: Arc<Semaphore>,
+    max_operations: usize,
+}
+
+impl BlockingStorageExecutor {
+    pub fn new(max_operations: usize) -> Result<Self, BlockingStorageExecutorError> {
+        if max_operations == 0 {
+            return Err(BlockingStorageExecutorError::InvalidLimit);
+        }
+        Ok(Self {
+            permits: Arc::new(Semaphore::new(max_operations)),
+            max_operations,
+        })
+    }
+
+    pub fn max_operations(&self) -> usize {
+        self.max_operations
+    }
+
+    async fn receive(
+        &self,
+        mut connection: ConnectionStateMachine,
+        pdu: Pdu,
+    ) -> Result<
+        (
+            ConnectionStateMachine,
+            Result<crate::ConnectionOutput, ConnectionError>,
+        ),
+        ConnectionIoError,
+    > {
+        let permit = self
+            .permits
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| ConnectionIoError::StorageExecutorClosed)?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let result = connection.receive(pdu);
+            (connection, result)
+        })
+        .await
+        .map_err(ConnectionIoError::StorageTask)
+    }
+}
+
+impl Default for BlockingStorageExecutor {
+    fn default() -> Self {
+        Self {
+            permits: Arc::new(Semaphore::new(DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS)),
+            max_operations: DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum BlockingStorageExecutorError {
+    #[error("max blocking storage operations must be greater than zero")]
+    InvalidLimit,
+}
 
 /// 하나의 연결 stream을 종료까지 처리한다. listener와 task 정책은 상위
 /// Target 서비스의 책임이므로 TCP뿐 아니라 테스트용 duplex stream에도 쓸 수 있다.
 pub async fn run_connection<S>(
+    stream: S,
+    connection: ConnectionStateMachine,
+) -> Result<ConnectionCloseReason, ConnectionIoError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    run_connection_with_executor(stream, connection, BlockingStorageExecutor::default()).await
+}
+
+pub async fn run_connection_with_executor<S>(
     mut stream: S,
     mut connection: ConnectionStateMachine,
+    storage_executor: BlockingStorageExecutor,
 ) -> Result<ConnectionCloseReason, ConnectionIoError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut codec = IscsiCodec::with_config(*connection.frame_config());
-    let mut input = BytesMut::with_capacity(8192);
-    let mut output = BytesMut::with_capacity(8192);
+    let mut input = BytesMut::with_capacity(READ_CHUNK_LENGTH);
+    let mut output = BytesMut::with_capacity(READ_CHUNK_LENGTH);
+    let mut read_buffer = [0u8; READ_CHUNK_LENGTH];
 
     loop {
         while let Some(frame) = codec.decode(&mut input)? {
@@ -31,17 +117,24 @@ where
                 connection.on_protocol_error();
                 return Err(ConnectionIoError::UnexpectedAhs);
             }
-            let response = connection.receive(frame.pdu)?;
+            let response = if requires_blocking_storage(&frame.pdu) {
+                let (returned, response) = storage_executor.receive(connection, frame.pdu).await?;
+                connection = returned;
+                response?
+            } else {
+                connection.receive(frame.pdu)?
+            };
+            let mut wrote_response = false;
             if let Some(pdu) = response.response {
-                codec.encode(pdu, &mut output)?;
+                write_pdu(&mut stream, &mut codec, &mut output, pdu).await?;
+                wrote_response = true;
             }
             for pdu in response.additional_responses {
-                codec.encode(pdu, &mut output)?;
+                write_pdu(&mut stream, &mut codec, &mut output, pdu).await?;
+                wrote_response = true;
             }
-            if !output.is_empty() {
-                stream.write_all(&output).await?;
+            if wrote_response {
                 stream.flush().await?;
-                output.clear();
             }
             if response.transition_after_send {
                 connection.response_sent()?;
@@ -70,17 +163,25 @@ where
                     .ok_or(ConnectionIoError::MissingCloseReason)
             }
         };
-        let read = match timeout(duration, stream.read_buf(&mut input)).await {
+        let input_limit = max_buffered_input_length(codec.frame_config());
+        let Some(remaining) = input_limit.checked_sub(input.len()) else {
+            connection.on_protocol_error();
+            return Err(ConnectionIoError::InputBufferLimit { limit: input_limit });
+        };
+        if remaining == 0 {
+            connection.on_protocol_error();
+            return Err(ConnectionIoError::InputBufferLimit { limit: input_limit });
+        }
+        let read_length = remaining.min(read_buffer.len());
+        let read = match timeout(duration, stream.read(&mut read_buffer[..read_length])).await {
             Ok(result) => result?,
             Err(_) => {
                 if timeout_kind == ConnectionTimeoutKind::Idle
                     && !connection.has_pending_keepalive()
                 {
                     let probe = connection.keepalive_probe(0)?;
-                    codec.encode(probe, &mut output)?;
-                    stream.write_all(&output).await?;
+                    write_pdu(&mut stream, &mut codec, &mut output, probe).await?;
                     stream.flush().await?;
-                    output.clear();
                     continue;
                 }
                 connection.on_timeout(timeout_kind);
@@ -95,7 +196,36 @@ where
                 .close_reason()
                 .ok_or(ConnectionIoError::MissingCloseReason);
         }
+        input.extend_from_slice(&read_buffer[..read]);
     }
+}
+
+fn requires_blocking_storage(pdu: &Pdu) -> bool {
+    matches!(pdu, Pdu::ScsiCommand(_) | Pdu::ScsiDataOut(_))
+}
+
+fn max_buffered_input_length(config: &FrameConfig) -> usize {
+    BHS_LEN
+        .saturating_add(config.max_ahs_length())
+        .saturating_add(4)
+        .saturating_add(config.max_recv_data_segment_length())
+        .saturating_add(3)
+        .saturating_add(4)
+}
+
+async fn write_pdu<S>(
+    stream: &mut S,
+    codec: &mut IscsiCodec,
+    output: &mut BytesMut,
+    pdu: Pdu,
+) -> Result<(), ConnectionIoError>
+where
+    S: AsyncWrite + Unpin,
+{
+    codec.encode(pdu, output)?;
+    stream.write_all(output).await?;
+    output.clear();
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -110,6 +240,12 @@ pub enum ConnectionIoError {
     UnexpectedAhs,
     #[error("closed Connection has no close reason")]
     MissingCloseReason,
+    #[error("connection input buffer reached the negotiated limit {limit}")]
+    InputBufferLimit { limit: usize },
+    #[error("blocking storage executor was closed")]
+    StorageExecutorClosed,
+    #[error("blocking storage task failed")]
+    StorageTask(#[source] tokio::task::JoinError),
 }
 
 #[cfg(test)]
@@ -119,12 +255,56 @@ mod tests {
     use crate::control::{LogoutRequest, LogoutResponse, NopOut};
     use crate::login::{IscsiName, LoginRequest, LoginResponse, TextParameters};
     use crate::login_policy::TargetLoginPolicy;
-    use crate::opcode::LoginStage;
+    use crate::opcode::{LoginStage, TaskAttribute};
+    use crate::scsi::ScsiCommand;
+    use crate::scsi_target::{ScsiTarget, StorageBackend, StorageError};
     use crate::target_login::TargetLoginProcessor;
     use crate::Pdu;
     use tokio::net::{TcpListener, TcpStream};
 
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::thread::ThreadId;
     use std::time::Duration;
+
+    struct GatedBackend {
+        started: Option<tokio::sync::oneshot::Sender<ThreadId>>,
+        gate: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl StorageBackend for GatedBackend {
+        fn block_size(&self) -> u32 {
+            512
+        }
+
+        fn block_count(&self) -> u64 {
+            1
+        }
+
+        fn read_only(&self) -> bool {
+            false
+        }
+
+        fn read_blocks(&mut self, _lba: u64, output: &mut [u8]) -> Result<(), StorageError> {
+            if let Some(started) = self.started.take() {
+                let _ = started.send(std::thread::current().id());
+            }
+            let (lock, ready) = &*self.gate;
+            let mut released = lock.lock().unwrap();
+            while !*released {
+                released = ready.wait(released).unwrap();
+            }
+            output.fill(0x5a);
+            Ok(())
+        }
+
+        fn write_blocks(&mut self, _lba: u64, _input: &[u8]) -> Result<(), StorageError> {
+            Ok(())
+        }
+
+        fn flush(&mut self) -> Result<(), StorageError> {
+            Ok(())
+        }
+    }
 
     async fn exchange(
         stream: &mut TcpStream,
@@ -160,6 +340,106 @@ mod tests {
             exp_stat_sn: 0,
             params: TextParameters::parse(text),
         })
+    }
+
+    fn established_read_connection(
+        backend: impl StorageBackend + 'static,
+    ) -> (ConnectionStateMachine, Pdu) {
+        let mut policy = TargetLoginPolicy::default();
+        policy.set_target_name(IscsiName::parse("iqn.2024-01.com.example:target").unwrap());
+        let mut connection =
+            ConnectionStateMachine::new(TargetLoginProcessor::new(policy, 1), 7, 4).unwrap();
+        connection
+            .receive(login_request(
+                LoginStage::Security,
+                LoginStage::Operational,
+                b"InitiatorName=iqn.2024-01.com.example:initiator\0TargetName=iqn.2024-01.com.example:target\0AuthMethod=None\0",
+                10,
+            ))
+            .unwrap();
+        connection.response_sent().unwrap();
+        connection
+            .receive(login_request(
+                LoginStage::Operational,
+                LoginStage::FullFeature,
+                b"",
+                11,
+            ))
+            .unwrap();
+        connection.response_sent().unwrap();
+        let exp_stat_sn = connection.sequence().unwrap().next_stat_sn();
+        let mut target = ScsiTarget::default();
+        target.add_lun(0, backend);
+        connection.set_scsi_target(target);
+        let mut cdb = [0; 16];
+        cdb[0] = 0x28;
+        cdb[8] = 1;
+        let command = Pdu::ScsiCommand(ScsiCommand {
+            immediate: false,
+            final_: true,
+            read: true,
+            write: false,
+            attr: TaskAttribute::Simple,
+            lun: 0,
+            initiator_task_tag: 11,
+            expected_data_transfer_length: 512,
+            cmd_sn: 11,
+            exp_stat_sn,
+            cdb,
+            immediate_data: bytes::Bytes::new(),
+        });
+        (connection, command)
+    }
+
+    fn release_gate(gate: &Arc<(Mutex<bool>, Condvar)>) {
+        let (lock, ready) = &**gate;
+        *lock.lock().unwrap() = true;
+        ready.notify_all();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn storage_executor_offloads_and_bounds_blocking_operations() {
+        let executor = BlockingStorageExecutor::new(1).unwrap();
+        let first_gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let second_gate = Arc::new((Mutex::new(true), Condvar::new()));
+        let (first_started_tx, first_started_rx) = tokio::sync::oneshot::channel();
+        let (second_started_tx, second_started_rx) = tokio::sync::oneshot::channel();
+        let (first_connection, first_command) = established_read_connection(GatedBackend {
+            started: Some(first_started_tx),
+            gate: first_gate.clone(),
+        });
+        let (second_connection, second_command) = established_read_connection(GatedBackend {
+            started: Some(second_started_tx),
+            gate: second_gate,
+        });
+
+        let caller_thread = std::thread::current().id();
+        let first_executor = executor.clone();
+        let first = tokio::spawn(async move {
+            first_executor
+                .receive(first_connection, first_command)
+                .await
+        });
+        let blocking_thread = first_started_rx.await.unwrap();
+        assert_ne!(blocking_thread, caller_thread);
+
+        let second_executor = executor.clone();
+        let second = tokio::spawn(async move {
+            second_executor
+                .receive(second_connection, second_command)
+                .await
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), second_started_rx)
+                .await
+                .is_err()
+        );
+
+        release_gate(&first_gate);
+        let (_, first_result) = first.await.unwrap().unwrap();
+        first_result.unwrap();
+        let (_, second_result) = second.await.unwrap().unwrap();
+        second_result.unwrap();
     }
 
     #[tokio::test]

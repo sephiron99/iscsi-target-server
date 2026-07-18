@@ -51,7 +51,10 @@ pub use connection::{
     ConnectionStateMachine, ConnectionTimeoutKind, ConnectionTimeouts,
 };
 #[cfg(feature = "codec")]
-pub use connection_io::{run_connection, ConnectionIoError};
+pub use connection_io::{
+    run_connection, run_connection_with_executor, BlockingStorageExecutor,
+    BlockingStorageExecutorError, ConnectionIoError, DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS,
+};
 pub use control_state::{ControlError, DiscoveryTarget, DEFAULT_MAX_TEXT_SEQUENCE_LENGTH};
 pub use error::{CodecError, FrameError, PduError};
 pub use frame::{
@@ -71,6 +74,7 @@ pub use negotiation::{
     MIN_LOGIN_TEXT_SEQUENCE_LENGTH, MIN_MAX_RECV_DATA_SEGMENT_LENGTH,
 };
 pub use opcode::Opcode;
+pub use scsi_target::{StorageError, StorageIoError, StorageIoOperation};
 pub use serial::{SequenceError, SequenceState, SerialNumber32};
 pub use session::{
     Session, SessionBinding, SessionError, SessionId, SessionIdentity, SessionRegistry,

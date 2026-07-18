@@ -23,8 +23,64 @@ pub enum StorageError {
     Misaligned,
     #[error("backend is read-only")]
     ReadOnly,
-    #[error("backend I/O failed")]
-    Io,
+    #[error(transparent)]
+    Io(#[from] StorageIoError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("storage {operation} failed with {kind:?} (OS error {raw_os_error:?})")]
+pub struct StorageIoError {
+    operation: StorageIoOperation,
+    kind: std::io::ErrorKind,
+    raw_os_error: Option<i32>,
+}
+
+impl StorageIoError {
+    pub fn operation(self) -> StorageIoOperation {
+        self.operation
+    }
+
+    pub fn kind(self) -> std::io::ErrorKind {
+        self.kind
+    }
+
+    pub fn raw_os_error(self) -> Option<i32> {
+        self.raw_os_error
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum StorageIoOperation {
+    #[error("open")]
+    Open,
+    #[error("metadata")]
+    Metadata,
+    #[error("resize")]
+    Resize,
+    #[error("seek")]
+    Seek,
+    #[error("read")]
+    Read,
+    #[error("write")]
+    Write,
+    #[error("flush")]
+    Flush,
+    #[error("sync")]
+    Sync,
+    #[error("device-control")]
+    DeviceControl,
+}
+
+pub(crate) fn storage_io_error(
+    operation: StorageIoOperation,
+    error: std::io::Error,
+) -> StorageError {
+    StorageIoError {
+        operation,
+        kind: error.kind(),
+        raw_os_error: error.raw_os_error(),
+    }
+    .into()
 }
 
 /// block 단위 Storage backend. 구현은 요청 buffer를 정확히 모두 처리해야 한다.
@@ -107,7 +163,7 @@ impl FileBackend {
             .read(true)
             .write(true)
             .open(path)
-            .map_err(|_| StorageError::Io)?;
+            .map_err(|error| storage_io_error(StorageIoOperation::Open, error))?;
         Self::from_file(file, block_size, false)
     }
 
@@ -115,7 +171,7 @@ impl FileBackend {
         let file = OpenOptions::new()
             .read(true)
             .open(path)
-            .map_err(|_| StorageError::Io)?;
+            .map_err(|error| storage_io_error(StorageIoOperation::Open, error))?;
         Self::from_file(file, block_size, true)
     }
 
@@ -128,17 +184,20 @@ impl FileBackend {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .open(path)
-            .map_err(|_| StorageError::Io)?;
-        file.set_len(length).map_err(|_| StorageError::Io)?;
+            .map_err(|error| storage_io_error(StorageIoOperation::Open, error))?;
+        file.set_len(length)
+            .map_err(|error| storage_io_error(StorageIoOperation::Resize, error))?;
         Self::from_file(file, block_size, false)
     }
 
     pub fn from_file(file: File, block_size: u32, read_only: bool) -> Result<Self, StorageError> {
         validate_block_geometry(block_size, 1)?;
-        let length = file.metadata().map_err(|_| StorageError::Io)?.len();
+        let length = file
+            .metadata()
+            .map_err(|error| storage_io_error(StorageIoOperation::Metadata, error))?
+            .len();
         if length == 0 {
             return Err(StorageError::OutOfRange);
         }
@@ -180,8 +239,10 @@ impl StorageBackend for FileBackend {
         let offset = block_io_offset(lba, output.len(), self.block_size, self.block_count)?;
         self.file
             .seek(SeekFrom::Start(offset))
-            .map_err(|_| StorageError::Io)?;
-        self.file.read_exact(output).map_err(|_| StorageError::Io)?;
+            .map_err(|error| storage_io_error(StorageIoOperation::Seek, error))?;
+        self.file
+            .read_exact(output)
+            .map_err(|error| storage_io_error(StorageIoOperation::Read, error))?;
         Ok(())
     }
 
@@ -192,15 +253,21 @@ impl StorageBackend for FileBackend {
         let offset = block_io_offset(lba, input.len(), self.block_size, self.block_count)?;
         self.file
             .seek(SeekFrom::Start(offset))
-            .map_err(|_| StorageError::Io)?;
-        self.file.write_all(input).map_err(|_| StorageError::Io)?;
+            .map_err(|error| storage_io_error(StorageIoOperation::Seek, error))?;
+        self.file
+            .write_all(input)
+            .map_err(|error| storage_io_error(StorageIoOperation::Write, error))?;
         Ok(())
     }
 
     fn flush(&mut self) -> Result<(), StorageError> {
-        self.file.flush().map_err(|_| StorageError::Io)?;
+        self.file
+            .flush()
+            .map_err(|error| storage_io_error(StorageIoOperation::Flush, error))?;
         if self.durable_flush {
-            self.file.sync_all().map_err(|_| StorageError::Io)?;
+            self.file
+                .sync_all()
+                .map_err(|error| storage_io_error(StorageIoOperation::Sync, error))?;
         }
         Ok(())
     }
@@ -599,7 +666,7 @@ fn storage_error(error: StorageError) -> ScsiExecution {
         StorageError::OutOfRange => check_condition(SENSE_ILLEGAL_REQUEST, 0x21, 0x00),
         StorageError::Misaligned => check_condition(SENSE_ILLEGAL_REQUEST, 0x1a, 0x00),
         StorageError::ReadOnly => check_condition(SENSE_DATA_PROTECT, 0x27, 0x00),
-        StorageError::Io => check_condition(0x03, 0x11, 0x00),
+        StorageError::Io(_) => check_condition(0x03, 0x11, 0x00),
     }
 }
 
@@ -847,6 +914,22 @@ mod tests {
         write[8] = 1;
         let result = target.execute(0, &write, &[0; 512]);
         assert_eq!((result.sense[2], result.sense[12]), (7, 0x27));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn sparse_creation_never_truncates_an_existing_file_and_keeps_io_context() {
+        let path = temp_image_path("existing");
+        fs::write(&path, b"keep-this-data").unwrap();
+
+        let error = FileBackend::create_sparse(&path, 512, 1).unwrap_err();
+        let StorageError::Io(error) = error else {
+            panic!("expected contextual I/O error");
+        };
+        assert_eq!(error.operation(), StorageIoOperation::Open);
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&path).unwrap(), b"keep-this-data");
+
         fs::remove_file(path).unwrap();
     }
 

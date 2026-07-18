@@ -13,6 +13,7 @@ use crate::login_policy::{AuthenticationPolicy, TargetLoginPolicy};
 
 pub const DEFAULT_ISCSI_PORT: u16 = 3260;
 pub const DEFAULT_MAX_SERVICE_CONNECTIONS: usize = 128;
+pub const DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ListenConfig {
@@ -230,6 +231,7 @@ impl TargetConfig {
 pub struct DaemonConfig {
     listen: ListenConfig,
     max_connections: usize,
+    max_blocking_storage_operations: usize,
     targets: Vec<TargetConfig>,
 }
 
@@ -241,6 +243,7 @@ impl DaemonConfig {
         Ok(Self {
             listen,
             max_connections,
+            max_blocking_storage_operations: DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS,
             targets: Vec::new(),
         })
     }
@@ -251,6 +254,18 @@ impl DaemonConfig {
 
     pub fn max_connections(&self) -> usize {
         self.max_connections
+    }
+
+    pub fn max_blocking_storage_operations(&self) -> usize {
+        self.max_blocking_storage_operations
+    }
+
+    pub fn set_max_blocking_storage_operations(&mut self, value: usize) -> Result<(), ConfigError> {
+        if value == 0 {
+            return Err(ConfigError::InvalidBlockingStorageLimit);
+        }
+        self.max_blocking_storage_operations = value;
+        Ok(())
     }
 
     pub fn targets(&self) -> &[TargetConfig] {
@@ -275,6 +290,9 @@ impl DaemonConfig {
         }
         if self.max_connections == 0 {
             return Err(ConfigError::InvalidConnectionLimit);
+        }
+        if self.max_blocking_storage_operations == 0 {
+            return Err(ConfigError::InvalidBlockingStorageLimit);
         }
         if self.targets.is_empty() {
             return Err(ConfigError::NoTargets);
@@ -301,6 +319,7 @@ impl Default for DaemonConfig {
         Self {
             listen: ListenConfig::default(),
             max_connections: DEFAULT_MAX_SERVICE_CONNECTIONS,
+            max_blocking_storage_operations: DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS,
             targets: Vec::new(),
         }
     }
@@ -332,6 +351,8 @@ pub enum ConfigError {
     InvalidPort,
     #[error("max_connections must be greater than zero")]
     InvalidConnectionLimit,
+    #[error("max_blocking_storage_operations must be greater than zero")]
+    InvalidBlockingStorageLimit,
     #[error("configuration must contain at least one Target")]
     NoTargets,
     #[error("duplicate Target name {0:?}")]

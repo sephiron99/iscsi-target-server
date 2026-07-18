@@ -127,7 +127,7 @@
 - [x] Data-In segment 분할, `DataSN`, status 동봉과 residual 처리
 - [x] `FirstBurstLength`, `MaxBurstLength`, `MaxOutstandingR2T` 적용
 - [ ] `DataPDUInOrder`, `DataSequenceInOrder` 지원 범위 결정
-- [ ] backpressure와 connection별 buffered byte 상한
+- [x] bounded blocking storage 실행, TCP backpressure와 connection별 buffered byte 상한
 
 완료 조건:
 
@@ -141,10 +141,13 @@
 - [x] 테스트용 memory backend
 - [x] raw IMG/file backend와 파일 크기 기반 LUN 생성
 - [x] sparse file 및 durable flush 정책
+- [x] 새 sparse image 생성 시 기존 파일 덮어쓰기 방지
 - [x] read-only LUN과 write protection sense 처리
 - [ ] VHD/VMDK 지원 범위와 외부 라이브러리 도입 여부 조사
 - [x] Windows physical disk/volume backend를 별도 platform 모듈로 격리
 - [x] backend 오류를 SCSI sense로 변환하는 규칙
+- [x] backend I/O 오류의 작업 종류, `ErrorKind`와 OS error code 보존
+- [-] Windows CI workflow에 physical disk/volume backend compile 및 단위 테스트 추가, 첫 runner 검증 대기
 
 완료 조건:
 
@@ -157,7 +160,7 @@
 - [x] bind 주소, port, Target IQN, LUN과 인증 설정 모델
 - [ ] 설정 파일 load/validate/save와 안전한 secret 처리
 - [ ] Target/LUN 추가, 제거와 상태 조회를 위한 service API
-- [ ] start, stop, graceful shutdown과 active session 정리
+- [ ] start, stop, 진행 중 blocking storage drain을 포함한 graceful shutdown과 active session 정리
 - [ ] 구조화된 logging과 민감 정보 필터링
 - [ ] headless 실행용 CLI
 - [ ] daemon과 CLI 통합 테스트
@@ -274,6 +277,7 @@ git diff --check
 ```
 
 Windows GUI가 추가된 뒤에는 Windows runner에서 GUI target의 build/check도 필수 검증에 포함한다.
+Windows storage backend는 GUI 도입 전부터 `windows-latest` runner에서 all-features test와 clippy를 실행한다.
 
 ## 참고 자료
 

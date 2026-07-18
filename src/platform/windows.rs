@@ -20,7 +20,9 @@ use windows_sys::Win32::System::Ioctl::{
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
-use crate::scsi_target::{block_io_offset, StorageBackend, StorageError};
+use crate::scsi_target::{
+    block_io_offset, storage_io_error, StorageBackend, StorageError, StorageIoOperation,
+};
 
 /// raw device를 열 때 허용할 접근 방식.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +100,7 @@ impl WindowsStorageBackend {
             .write(!read_only)
             .share_mode(share_mode)
             .open(path)
-            .map_err(|_| StorageError::Io)?;
+            .map_err(|error| storage_io_error(StorageIoOperation::Open, error))?;
 
         if is_volume && !read_only {
             device_io_control_no_buffers(&file, FSCTL_LOCK_VOLUME)?;
@@ -141,8 +143,10 @@ impl StorageBackend for WindowsStorageBackend {
         let offset = block_io_offset(lba, output.len(), self.block_size, self.block_count)?;
         self.file
             .seek(SeekFrom::Start(offset))
-            .map_err(|_| StorageError::Io)?;
-        self.file.read_exact(output).map_err(|_| StorageError::Io)
+            .map_err(|error| storage_io_error(StorageIoOperation::Seek, error))?;
+        self.file
+            .read_exact(output)
+            .map_err(|error| storage_io_error(StorageIoOperation::Read, error))
     }
 
     fn write_blocks(&mut self, lba: u64, input: &[u8]) -> Result<(), StorageError> {
@@ -152,14 +156,20 @@ impl StorageBackend for WindowsStorageBackend {
         let offset = block_io_offset(lba, input.len(), self.block_size, self.block_count)?;
         self.file
             .seek(SeekFrom::Start(offset))
-            .map_err(|_| StorageError::Io)?;
-        self.file.write_all(input).map_err(|_| StorageError::Io)
+            .map_err(|error| storage_io_error(StorageIoOperation::Seek, error))?;
+        self.file
+            .write_all(input)
+            .map_err(|error| storage_io_error(StorageIoOperation::Write, error))
     }
 
     fn flush(&mut self) -> Result<(), StorageError> {
-        self.file.flush().map_err(|_| StorageError::Io)?;
+        self.file
+            .flush()
+            .map_err(|error| storage_io_error(StorageIoOperation::Flush, error))?;
         if self.durable_flush {
-            self.file.sync_all().map_err(|_| StorageError::Io)?;
+            self.file
+                .sync_all()
+                .map_err(|error| storage_io_error(StorageIoOperation::Sync, error))?;
         }
         Ok(())
     }
@@ -201,7 +211,10 @@ fn device_io_control_no_buffers(file: &File, code: u32) -> Result<(), StorageErr
         )
     };
     if succeeded == 0 {
-        return Err(StorageError::Io);
+        return Err(storage_io_error(
+            StorageIoOperation::DeviceControl,
+            std::io::Error::last_os_error(),
+        ));
     }
     Ok(())
 }
@@ -230,8 +243,39 @@ fn device_io_control<I, O: Default>(file: &File, code: u32, input: &I) -> Result
             null_mut(),
         )
     };
-    if succeeded == 0 || returned < output_size {
-        return Err(StorageError::Io);
+    if succeeded == 0 {
+        return Err(storage_io_error(
+            StorageIoOperation::DeviceControl,
+            std::io::Error::last_os_error(),
+        ));
+    }
+    if returned < output_size {
+        return Err(storage_io_error(
+            StorageIoOperation::DeviceControl,
+            std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "DeviceIoControl returned a truncated result",
+            ),
+        ));
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn access_mode_reports_read_only_state() {
+        assert!(WindowsStorageAccess::ReadOnly.read_only());
+        assert!(!WindowsStorageAccess::ReadWrite.read_only());
+    }
+
+    #[test]
+    fn invalid_volume_letter_is_rejected_before_device_access() {
+        assert_eq!(
+            WindowsStorageBackend::open_volume('1', WindowsStorageAccess::ReadOnly).unwrap_err(),
+            StorageError::OutOfRange
+        );
+    }
 }

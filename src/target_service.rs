@@ -7,18 +7,33 @@ use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
+use crate::config::{DaemonConfig, DEFAULT_MAX_SERVICE_CONNECTIONS};
 use crate::connection::{ConnectionError, ConnectionStateMachine};
-use crate::connection_io::run_connection;
+use crate::connection_io::{
+    run_connection_with_executor, BlockingStorageExecutor, BlockingStorageExecutorError,
+    DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TargetServiceConfig {
     pub max_connections: usize,
+    pub max_blocking_storage_operations: usize,
 }
 
 impl Default for TargetServiceConfig {
     fn default() -> Self {
         Self {
-            max_connections: 128,
+            max_connections: DEFAULT_MAX_SERVICE_CONNECTIONS,
+            max_blocking_storage_operations: DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS,
+        }
+    }
+}
+
+impl From<&DaemonConfig> for TargetServiceConfig {
+    fn from(config: &DaemonConfig) -> Self {
+        Self {
+            max_connections: config.max_connections(),
+            max_blocking_storage_operations: config.max_blocking_storage_operations(),
         }
     }
 }
@@ -36,6 +51,7 @@ pub struct TargetService<F> {
     listener: TcpListener,
     config: TargetServiceConfig,
     connection_factory: Arc<F>,
+    storage_executor: BlockingStorageExecutor,
 }
 
 impl<F> TargetService<F>
@@ -50,10 +66,13 @@ where
         if config.max_connections == 0 {
             return Err(TargetServiceError::InvalidConnectionLimit);
         }
+        let storage_executor =
+            BlockingStorageExecutor::new(config.max_blocking_storage_operations)?;
         Ok(Self {
             listener: TcpListener::bind(address).await?,
             config,
             connection_factory: Arc::new(connection_factory),
+            storage_executor,
         })
     }
 
@@ -82,7 +101,11 @@ where
                     summary.accepted_connections = summary.accepted_connections.saturating_add(1);
                     match (self.connection_factory)(peer) {
                         Ok(connection) => {
-                            tasks.spawn(run_connection(stream, connection));
+                            tasks.spawn(run_connection_with_executor(
+                                stream,
+                                connection,
+                                self.storage_executor.clone(),
+                            ));
                         }
                         Err(_) => {
                             summary.failed_connections = summary.failed_connections.saturating_add(1);
@@ -128,6 +151,8 @@ pub enum TargetServiceError {
     InvalidConnectionLimit,
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    BlockingStorage(#[from] BlockingStorageExecutorError),
 }
 
 #[cfg(test)]
@@ -149,7 +174,10 @@ mod tests {
         let target_name = IscsiName::parse("iqn.2024-01.com.example:target").unwrap();
         let service = TargetService::bind(
             "127.0.0.1:0",
-            TargetServiceConfig { max_connections: 2 },
+            TargetServiceConfig {
+                max_connections: 2,
+                ..TargetServiceConfig::default()
+            },
             move |_| {
                 let mut policy = TargetLoginPolicy::default();
                 policy.set_target_name(target_name.clone());
@@ -210,13 +238,35 @@ mod tests {
     async fn zero_connection_limit_is_rejected_before_bind() {
         let result = TargetService::bind(
             "127.0.0.1:0",
-            TargetServiceConfig { max_connections: 0 },
+            TargetServiceConfig {
+                max_connections: 0,
+                ..TargetServiceConfig::default()
+            },
             |_| unreachable!(),
         )
         .await;
         assert!(matches!(
             result,
             Err(TargetServiceError::InvalidConnectionLimit)
+        ));
+    }
+
+    #[tokio::test]
+    async fn zero_blocking_storage_limit_is_rejected_before_bind() {
+        let result = TargetService::bind(
+            "127.0.0.1:0",
+            TargetServiceConfig {
+                max_connections: 1,
+                max_blocking_storage_operations: 0,
+            },
+            |_| unreachable!(),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(TargetServiceError::BlockingStorage(
+                BlockingStorageExecutorError::InvalidLimit
+            ))
         ));
     }
 }
