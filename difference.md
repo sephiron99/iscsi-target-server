@@ -20,24 +20,24 @@ InitiatorName/ISID/endpoint 기반 허용·거부 훅만 제공한다.
 
 ## 프로토콜 계층 비교
 
-| 기능 | iSCSIConsole | 이 프로젝트 |
-|---|---|---|
-| 기준 표준 | RFC 3720 | RFC 7143 |
-| 인증 | 없음 (`AuthMethod=None` 고정) | None + 단방향 CHAP |
-| Header/Data Digest | 없음 (`None` 고정, CRC32C 미지원) | CRC32C 협상·검증 |
-| Login 파라미터 협상 | 있음 | 있음 |
-| Discovery `SendTargets` | 있음 (`ISCSIServer.TextRequest.cs`) | 있음 |
-| discovery session 명령 제한 | 있음 (Reject) | 있음 |
-| Session/Connection reinstatement | 있음 (`ISCSIServer.Login.cs`) | 있음 |
-| NOP keepalive (target발 probe) | 있음 (`ConnectionManager.SendKeepAlive`) | 있음 (idle timeout 기반) |
-| Task Management | **PDU 타입 자체가 없음** — 일반 Reject(CommandNotSupported) | Request/Response 기본 기능 |
-| Async Message | PDU 타입 없음 | 타입 있는 PDU |
-| Reject | 있음 | 있음 |
-| ERL | 0 | 0 |
-| MC/S (`MaxConnections`) | 1 ("implementation limit") | 1 |
-| `DataPDUInOrder`/`DataSequenceInOrder` | 기본값 Yes/Yes 고정 | 지원 범위 결정 예정 (plan 6단계) |
-| sequence number wraparound 산술 | 일반 정수 비교 위주 | serial number 산술 (`serial.rs`) |
-| peer 입력 자원 상한 | 제한적 | frame/text/buffered byte 상한 + bounded blocking 실행 |
+| 기능                                   | iSCSIConsole                                                | 이 프로젝트                                           |
+|----------------------------------------|-------------------------------------------------------------|-------------------------------------------------------|
+| 기준 표준                              | RFC 3720                                                    | RFC 7143                                              |
+| 인증                                   | 없음 (`AuthMethod=None` 고정)                               | None + 단방향 CHAP                                    |
+| Header/Data Digest                     | 없음 (`None` 고정, CRC32C 미지원)                           | CRC32C 협상·검증                                      |
+| Login 파라미터 협상                    | 있음                                                        | 있음                                                  |
+| Discovery `SendTargets`                | 있음 (`ISCSIServer.TextRequest.cs`)                         | 있음                                                  |
+| discovery session 명령 제한            | 있음 (Reject)                                               | 있음                                                  |
+| Session/Connection reinstatement       | 있음 (`ISCSIServer.Login.cs`)                               | 있음                                                  |
+| NOP keepalive (target발 probe)         | 있음 (`ConnectionManager.SendKeepAlive`)                    | 있음 (idle timeout 기반)                              |
+| Task Management                        | **PDU 타입 자체가 없음** — 일반 Reject(CommandNotSupported) | Request/Response 기본 기능                            |
+| Async Message                          | PDU 타입 없음                                               | 타입 있는 PDU                                         |
+| Reject                                 | 있음                                                        | 있음                                                  |
+| ERL                                    | 0                                                           | 0                                                     |
+| MC/S (`MaxConnections`)                | 1 ("implementation limit")                                  | 1                                                     |
+| `DataPDUInOrder`/`DataSequenceInOrder` | 기본값 Yes/Yes 고정                                         | 지원 범위 결정 예정 (plan 6단계)                      |
+| sequence number wraparound 산술        | 일반 정수 비교 위주                                         | serial number 산술 (`serial.rs`)                      |
+| peer 입력 자원 상한                    | 제한적                                                      | frame/text/buffered byte 상한 + bounded blocking 실행 |
 
 원본의 기본/희망 파라미터 (`DefaultParameters.cs`, `ISCSIServer.Parameters.cs`):
 `MaxRecvDataSegmentLength=262144`, `MaxBurstLength=262144`, `FirstBurstLength=65536`,
@@ -65,32 +65,32 @@ Block Limits, Block Device Characteristics 제공.
 
 ## Storage backend 비교 — 원본이 크게 앞선 유일한 영역
 
-| backend | iSCSIConsole (DiskAccessLibrary 1.6.3) | 이 프로젝트 |
-|---|---|---|
-| memory (RAM disk) | 있음 (GUI에서 생성) | 있음 (테스트용) |
-| raw IMG/file | 있음 | 있음 (sparse 생성 + durable flush) |
-| VHD fixed | 있음 (생성 가능) | 없음 (plan 7단계 조사 예정) |
-| VHD dynamic | 있음 | 없음 (동일) |
-| VMDK | 있음 | 없음 (동일) |
-| 물리 디스크 (Windows) | 있음 | 있음 (`platform/windows.rs`) |
-| basic volume | 있음 | volume lock/read 지원 |
-| dynamic volume (소프트웨어 RAID) | 있음 | 없음 |
-| SPTI pass-through (실 SCSI 장치에 CDB 전달) | 있음 (`ISCSI/Win32/SCSITarget/SPTITarget.cs`) | 없음, 계획에도 없음 |
+| backend                                     | iSCSIConsole (DiskAccessLibrary 1.6.3)        | 이 프로젝트                        |
+|---------------------------------------------|-----------------------------------------------|------------------------------------|
+| memory (RAM disk)                           | 있음 (GUI에서 생성)                           | 있음 (테스트용)                    |
+| raw IMG/file                                | 있음                                          | 있음 (sparse 생성 + durable flush) |
+| VHD fixed                                   | 있음 (생성 가능)                              | 없음 (plan 7단계 조사 예정)        |
+| VHD dynamic                                 | 있음                                          | 없음 (동일)                        |
+| VMDK                                        | 있음                                          | 없음 (동일)                        |
+| 물리 디스크 (Windows)                       | 있음                                          | 있음 (`platform/windows.rs`)       |
+| basic volume                                | 있음                                          | volume lock/read 지원              |
+| dynamic volume (소프트웨어 RAID)            | 있음                                          | 없음                               |
+| SPTI pass-through (실 SCSI 장치에 CDB 전달) | 있음 (`ISCSI/Win32/SCSITarget/SPTITarget.cs`) | 없음, 계획에도 없음                |
 
 원본 README가 내세우는 대표 기능이 가상 디스크 서빙이므로, 기능 격차의 본체는 **VHD(특히 dynamic) 지원**이다.
 
 ## 관리·운영 비교
 
-| 항목 | iSCSIConsole | 이 프로젝트 (plan 포함) |
-|---|---|---|
-| GUI | WinForms (target 추가, VHD/RAM disk 생성, 디스크/volume 선택) | WinSafe 계획 (9단계, 미구현) |
-| 설정 저장/복원 | **없음 — 재시작마다 GUI로 재구성** | 설정 파일 계획 (8단계, 미구현) |
-| CLI / headless 실행 | 없음 | 계획 (8단계, 미구현) |
-| service API | 이벤트 훅 수준 | 계획 (8단계, 미구현) |
-| logging | severity 로그 + 파일 | 구조화 로깅 계획 (8단계) |
-| 크로스플랫폼 | Windows + Mono(Linux/macOS/WinPE) | 네이티브 (GUI만 Windows 전용 계획) |
-| initiator 구현 | basic client 포함 (`ISCSI.Client`) | 없음 (12단계 core 분리 시 양쪽 사용 가능성만 유지) |
-| 라이브러리 배포 | NuGet package | 12단계 crates.io 계획 |
+| 항목                | iSCSIConsole                                                  | 이 프로젝트 (plan 포함)                            |
+|---------------------|---------------------------------------------------------------|----------------------------------------------------|
+| GUI                 | WinForms (target 추가, VHD/RAM disk 생성, 디스크/volume 선택) | WinSafe 계획 (9단계, 미구현)                       |
+| 설정 저장/복원      | **없음 — 재시작마다 GUI로 재구성**                            | 설정 파일 계획 (8단계, 미구현)                     |
+| CLI / headless 실행 | 없음                                                          | 계획 (8단계, 미구현)                               |
+| service API         | 이벤트 훅 수준                                                | 계획 (8단계, 미구현)                               |
+| logging             | severity 로그 + 파일                                          | 구조화 로깅 계획 (8단계)                           |
+| 크로스플랫폼        | Windows + Mono(Linux/macOS/WinPE)                             | 네이티브 (GUI만 Windows 전용 계획)                 |
+| initiator 구현      | basic client 포함 (`ISCSI.Client`)                            | 없음 (12단계 core 분리 시 양쪽 사용 가능성만 유지) |
+| 라이브러리 배포     | NuGet package                                                 | 12단계 crates.io 계획                              |
 
 ## 구현 방식 차이
 
