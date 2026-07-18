@@ -82,6 +82,10 @@ impl SequenceState {
         self.max_cmd_sn.value()
     }
 
+    pub fn next_stat_sn(&self) -> u32 {
+        self.next_stat_sn.value()
+    }
+
     pub fn accept_cmd_sn(&mut self, cmd_sn: u32) -> Result<(), SequenceError> {
         self.validate_cmd_sn(cmd_sn)?;
         if !self.received_out_of_order.insert(cmd_sn) {

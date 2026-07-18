@@ -97,6 +97,18 @@ impl TargetLoginProcessor {
         processor
     }
 
+    pub fn session_type(&self) -> SessionType {
+        self.negotiation.session_type()
+    }
+
+    pub fn target_name(&self) -> Option<&IscsiName> {
+        self.negotiation.target_name()
+    }
+
+    pub fn configured_target_name(&self) -> Option<&IscsiName> {
+        self.policy.target_name()
+    }
+
     pub fn handle_request(
         &mut self,
         request: &LoginRequest,

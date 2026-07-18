@@ -133,6 +133,7 @@ mod tests {
 
     fn nop_out(data: Bytes) -> Pdu {
         Pdu::NopOut(NopOut {
+            immediate: true,
             lun: 0,
             initiator_task_tag: 7,
             target_transfer_tag: u32::MAX,

@@ -15,6 +15,7 @@ pub mod auth;
 pub mod bhs;
 pub mod connection;
 pub mod control;
+mod control_state;
 pub mod digest;
 pub mod error;
 pub mod frame;
@@ -23,6 +24,7 @@ pub mod login_policy;
 pub mod negotiation;
 pub mod opcode;
 pub mod scsi;
+pub mod scsi_target;
 pub mod serial;
 pub mod session;
 pub mod target_login;
@@ -42,6 +44,7 @@ pub use connection::{
 };
 #[cfg(feature = "codec")]
 pub use connection_io::{run_connection, ConnectionIoError};
+pub use control_state::{ControlError, DiscoveryTarget, DEFAULT_MAX_TEXT_SEQUENCE_LENGTH};
 pub use error::{CodecError, FrameError, PduError};
 pub use frame::{
     FrameCodec, FrameConfig, PduFrame, RawFrame, DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH,
@@ -70,8 +73,8 @@ pub use target_login::{TargetLoginError, TargetLoginOutcome, TargetLoginProcesso
 use bytes::{BufMut, Bytes, BytesMut};
 
 use control::{
-    LogoutRequest, LogoutResponse, NopIn, NopOut, Reject, TaskMgmtRequest, TaskMgmtResponse,
-    TextRequest, TextResponse,
+    AsyncMessage, LogoutRequest, LogoutResponse, NopIn, NopOut, Reject, TaskMgmtRequest,
+    TaskMgmtResponse, TextRequest, TextResponse,
 };
 use login::{LoginRequest, LoginResponse};
 use scsi::{R2t, ScsiCommand, ScsiDataIn, ScsiDataOut, ScsiResponse};
@@ -101,6 +104,7 @@ pub enum Pdu {
     NopIn(NopIn),
     TaskMgmtResponse(TaskMgmtResponse),
     R2t(R2t),
+    AsyncMessage(AsyncMessage),
     Reject(Reject),
 }
 
@@ -123,6 +127,7 @@ impl Pdu {
             Pdu::NopIn(_) => Opcode::NopIn,
             Pdu::TaskMgmtResponse(_) => Opcode::ScsiTaskMgmtResponse,
             Pdu::R2t(_) => Opcode::R2t,
+            Pdu::AsyncMessage(_) => Opcode::AsyncMessage,
             Pdu::Reject(_) => Opcode::Reject,
         }
     }
@@ -157,9 +162,7 @@ impl Pdu {
             }
             Opcode::R2t => Pdu::R2t(R2t::decode(&bhs, data)?),
             Opcode::Reject => Pdu::Reject(Reject::decode(&bhs, data)?),
-            Opcode::AsyncMessage => {
-                return Err(PduError::UnsupportedOpcode(Opcode::AsyncMessage as u8))
-            }
+            Opcode::AsyncMessage => Pdu::AsyncMessage(AsyncMessage::decode(&bhs, data)?),
         })
     }
 
@@ -233,6 +236,10 @@ impl Pdu {
                 p.encode_bhs(&mut bhs);
                 Bytes::new()
             }
+            Pdu::AsyncMessage(p) => {
+                p.encode_bhs(&mut bhs);
+                p.data.clone()
+            }
             Pdu::Reject(p) => {
                 p.encode_bhs(&mut bhs);
                 p.rejected_header.clone()
@@ -287,6 +294,7 @@ mod tests {
         cdb[2..6].copy_from_slice(&100u32.to_be_bytes()); // LBA = 100
 
         let pdu = Pdu::ScsiCommand(ScsiCommand {
+            immediate: false,
             final_: true,
             read: true,
             write: false,
@@ -416,13 +424,18 @@ mod tests {
     }
 
     #[test]
-    fn reports_recognized_but_unsupported_opcode_separately() {
+    fn asynchronous_message_is_a_typed_pdu() {
         let mut bhs = [0u8; BHS_LEN];
         bhs[0] = Opcode::AsyncMessage as u8;
+        bhs[1] = 0x80;
+        bhs[16..20].copy_from_slice(&u32::MAX.to_be_bytes());
+        bhs[36] = 1;
+        bhs[42..44].copy_from_slice(&30u16.to_be_bytes());
 
-        assert_eq!(
-            Pdu::decode(&bhs, Bytes::new()).unwrap_err(),
-            PduError::UnsupportedOpcode(Opcode::AsyncMessage as u8)
-        );
+        let Pdu::AsyncMessage(message) = Pdu::decode(&bhs, Bytes::new()).unwrap() else {
+            panic!("expected AsyncMessage");
+        };
+        assert_eq!(message.async_event, 1);
+        assert_eq!(message.parameter3, 30);
     }
 }

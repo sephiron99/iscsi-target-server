@@ -18,6 +18,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 
 #[derive(Debug, Clone)]
 pub struct ScsiCommand {
+    pub immediate: bool,
     pub final_: bool,
     pub read: bool,
     pub write: bool,
@@ -39,6 +40,7 @@ impl ScsiCommand {
         cdb.copy_from_slice(&bhs.0[32..48]);
 
         Ok(Self {
+            immediate: bhs.is_immediate(),
             final_: flags & 0x80 != 0,
             read: flags & 0x40 != 0,
             write: flags & 0x20 != 0,
@@ -54,7 +56,7 @@ impl ScsiCommand {
     }
 
     pub fn encode_bhs(&self, bhs: &mut Bhs) {
-        bhs.set_opcode(Opcode::ScsiCommand, false);
+        bhs.set_opcode(Opcode::ScsiCommand, self.immediate);
         let flags = (self.final_ as u8) << 7
             | (self.read as u8) << 6
             | (self.write as u8) << 5
@@ -341,6 +343,7 @@ mod tests {
         let mut cdb = [0u8; 16];
         cdb[0] = 0x28; // READ(10)
         let cmd = ScsiCommand {
+            immediate: false,
             final_: true,
             read: true,
             write: false,

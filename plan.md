@@ -81,14 +81,15 @@
 
 ## 4. 제어 PDU와 Discovery
 
-- [ ] NOP-Out/NOP-In keepalive 및 ping 응답
-- [ ] Text Request/Response의 continuation 처리
-- [ ] discovery session의 `SendTargets` 구현
-- [ ] Logout Request/Response와 reason별 종료 처리
-- [ ] Reject PDU 생성과 원인별 정책
-- [ ] Task Management Request/Response 기본 기능
-- [ ] Async Message PDU 타입과 필요한 Target 알림 검토
-- [ ] 지원하지 않는 기능의 명시적 응답과 ERL 0 정책 정의
+- [x] NOP-Out/NOP-In keepalive 및 ping 응답
+- [x] Text Request/Response의 continuation 처리
+- [x] discovery session의 `SendTargets` 구현
+- [x] Logout Request/Response와 reason별 종료 처리
+- [x] Reject PDU 생성과 원인별 정책
+- [x] Task Management Request/Response 기본 기능
+- [x] Async Message PDU 타입과 필요한 Target 알림 검토
+- [x] 지원하지 않는 기능의 명시적 응답과 ERL 0 정책 정의
+- [ ] Linux `open-iscsi`를 사용한 실제 discovery 상호운용성 검증
 
 완료 조건:
 
@@ -97,18 +98,19 @@
 
 ## 5. SCSI 명령 실행 계층
 
-- [ ] CDB 공통 파싱과 LUN dispatch
-- [ ] `TEST UNIT READY`
-- [ ] `INQUIRY`와 필수 VPD page
-- [ ] `REQUEST SENSE`
-- [ ] `READ CAPACITY (10/16)`
-- [ ] `REPORT LUNS`
-- [ ] `MODE SENSE (6/10)`의 필요한 최소 page
-- [ ] `READ (10/12/16)`
-- [ ] `WRITE (10/12/16)`
-- [ ] `SYNCHRONIZE CACHE (10/16)`
-- [ ] unsupported/invalid CDB의 CHECK CONDITION과 sense data 생성
-- [ ] SCSI status, sense, underflow/overflow와 residual count 검증
+- [x] CDB 공통 파싱과 LUN dispatch
+- [x] `TEST UNIT READY`
+- [x] `INQUIRY`와 필수 VPD page
+- [x] `REQUEST SENSE`
+- [x] `READ CAPACITY (10/16)`
+- [x] `REPORT LUNS`
+- [x] `MODE SENSE (6/10)`의 필요한 최소 page
+- [x] `READ (10/12/16)`
+- [x] `WRITE (10/12/16)`
+- [x] `SYNCHRONIZE CACHE (10/16)`
+- [x] unsupported/invalid CDB의 CHECK CONDITION과 sense data 생성
+- [x] SCSI status, sense, underflow/overflow와 residual count 검증
+- [ ] Data 전송 경로를 통한 Initiator block read/write/flush 통합 검증
 
 완료 조건:
 

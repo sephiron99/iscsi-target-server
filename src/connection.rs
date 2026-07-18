@@ -2,10 +2,11 @@
 
 use std::time::Duration;
 
-use crate::control::LogoutResponse;
+use crate::control_state::{DiscoveryTarget, FullFeatureDisposition, FullFeatureState};
 use crate::frame::FrameConfig;
 use crate::negotiation::NegotiatedFrameParameters;
 use crate::opcode::LoginStage;
+use crate::scsi_target::ScsiTarget;
 use crate::serial::{SequenceError, SequenceState};
 use crate::target_login::{TargetLoginError, TargetLoginProcessor};
 use crate::Pdu;
@@ -56,7 +57,8 @@ impl Default for ConnectionTimeouts {
 
 #[derive(Debug)]
 pub struct ConnectionOutput {
-    pub response: Pdu,
+    /// 응답이 필요 없는 `NOP-Out` 확인이면 `None`이다.
+    pub response: Option<Pdu>,
     /// 응답을 완전히 전송한 뒤 [`ConnectionStateMachine::response_sent`]를
     /// 호출해야 하는지 나타낸다.
     pub transition_after_send: bool,
@@ -75,6 +77,10 @@ pub struct ConnectionStateMachine {
     pending_close_reason: Option<ConnectionCloseReason>,
     close_reason: Option<ConnectionCloseReason>,
     timeouts: ConnectionTimeouts,
+    discovery_targets: Vec<DiscoveryTarget>,
+    max_text_sequence_length: usize,
+    full_feature: Option<FullFeatureState>,
+    scsi_target: Option<ScsiTarget>,
 }
 
 impl ConnectionStateMachine {
@@ -97,6 +103,10 @@ impl ConnectionStateMachine {
             pending_close_reason: None,
             close_reason: None,
             timeouts: ConnectionTimeouts::default(),
+            discovery_targets: Vec::new(),
+            max_text_sequence_length: crate::control_state::DEFAULT_MAX_TEXT_SEQUENCE_LENGTH,
+            full_feature: None,
+            scsi_target: None,
         })
     }
 
@@ -122,6 +132,67 @@ impl ConnectionStateMachine {
 
     pub fn set_timeouts(&mut self, timeouts: ConnectionTimeouts) {
         self.timeouts = timeouts;
+    }
+
+    pub fn set_discovery_targets(&mut self, targets: Vec<DiscoveryTarget>) {
+        self.discovery_targets = targets;
+    }
+
+    pub fn set_scsi_target(&mut self, target: ScsiTarget) {
+        self.scsi_target = Some(target);
+    }
+
+    pub fn set_max_text_sequence_length(&mut self, value: usize) -> Result<(), ConnectionError> {
+        if value == 0 || value > crate::frame::MAX_DATA_SEGMENT_LENGTH {
+            return Err(ConnectionError::InvalidTextSequenceLimit(value));
+        }
+        self.max_text_sequence_length = value;
+        if let Some(full_feature) = self.full_feature.as_mut() {
+            full_feature.set_max_text_sequence_length(value);
+        }
+        Ok(())
+    }
+
+    pub fn has_pending_keepalive(&self) -> bool {
+        self.full_feature
+            .as_ref()
+            .is_some_and(FullFeatureState::has_pending_ping)
+    }
+
+    pub fn keepalive_probe(&mut self, lun: u64) -> Result<Pdu, ConnectionError> {
+        if self.phase != ConnectionPhase::FullFeaturePhase {
+            return Err(ConnectionError::PduInWrongState {
+                opcode: crate::Opcode::NopIn,
+                phase: self.phase,
+            });
+        }
+        let sequence = self
+            .sequence
+            .as_ref()
+            .ok_or(ConnectionError::MissingSequenceState)?;
+        self.full_feature
+            .as_mut()
+            .ok_or(ConnectionError::MissingFullFeatureState)?
+            .keepalive_probe(sequence, lun)
+            .map_err(ConnectionError::Control)
+    }
+
+    pub fn request_logout(&mut self, timeout_seconds: u16) -> Result<Pdu, ConnectionError> {
+        if self.phase != ConnectionPhase::FullFeaturePhase {
+            return Err(ConnectionError::PduInWrongState {
+                opcode: crate::Opcode::AsyncMessage,
+                phase: self.phase,
+            });
+        }
+        let sequence = self
+            .sequence
+            .as_mut()
+            .ok_or(ConnectionError::MissingSequenceState)?;
+        Ok(self
+            .full_feature
+            .as_ref()
+            .ok_or(ConnectionError::MissingFullFeatureState)?
+            .request_logout(sequence, timeout_seconds))
     }
 
     pub fn receive(&mut self, pdu: Pdu) -> Result<ConnectionOutput, ConnectionError> {
@@ -216,6 +287,19 @@ impl ConnectionStateMachine {
                         self.command_window,
                     )?);
                     self.pending_frame_parameters = completed;
+                    let mut targets = self.discovery_targets.clone();
+                    if targets.is_empty() {
+                        if let Some(name) = self.login.configured_target_name().cloned() {
+                            targets.push(DiscoveryTarget::new(name));
+                        }
+                    }
+                    let mut full_feature = FullFeatureState::new(
+                        self.login.session_type(),
+                        self.login.target_name().cloned(),
+                        targets,
+                    );
+                    full_feature.set_max_text_sequence_length(self.max_text_sequence_length);
+                    self.full_feature = Some(full_feature);
                     ConnectionPhase::FullFeaturePhase
                 }
             }
@@ -224,46 +308,61 @@ impl ConnectionStateMachine {
         };
         self.pending_phase = Some(next_phase);
         Ok(ConnectionOutput {
-            response: Pdu::LoginResponse(outcome.response),
+            response: Some(Pdu::LoginResponse(outcome.response)),
             transition_after_send: true,
         })
     }
 
     fn receive_full_feature(&mut self, pdu: Pdu) -> Result<ConnectionOutput, ConnectionError> {
-        let Pdu::LogoutRequest(request) = pdu else {
-            return Err(ConnectionError::PduInWrongState {
-                opcode: pdu.opcode(),
-                phase: self.phase,
-            });
-        };
-        if request.reason_code > 2 {
-            return Err(ConnectionError::InvalidLogoutReason(request.reason_code));
-        }
-        if request.reason_code != 0 && request.cid != self.cid {
-            return Err(ConnectionError::CidMismatch {
-                expected: self.cid,
-                actual: request.cid,
-            });
-        }
         let sequence = self
             .sequence
             .as_mut()
             .ok_or(ConnectionError::MissingSequenceState)?;
-        sequence.validate_cmd_sn(request.cmd_sn)?;
-        sequence.acknowledge_exp_stat_sn(request.exp_stat_sn)?;
-        let response = LogoutResponse::success(
-            request.initiator_task_tag,
-            sequence.allocate_stat_sn(),
-            sequence.exp_cmd_sn(),
-            sequence.max_cmd_sn(),
-        );
-        self.phase = ConnectionPhase::Logout;
-        self.pending_phase = Some(ConnectionPhase::Closed);
-        self.pending_close_reason = Some(ConnectionCloseReason::NormalLogout);
-        Ok(ConnectionOutput {
-            response: Pdu::LogoutResponse(response),
-            transition_after_send: true,
-        })
+        let disposition = self
+            .full_feature
+            .as_mut()
+            .ok_or(ConnectionError::MissingFullFeatureState)?
+            .receive_with_scsi(
+                pdu,
+                sequence,
+                self.cid,
+                self.frame_config.max_send_data_segment_length(),
+                self.scsi_target.as_mut(),
+            )
+            .map_err(|error| match error {
+                crate::control_state::ControlError::Sequence(source) => {
+                    ConnectionError::Sequence(source)
+                }
+                other => ConnectionError::Control(other),
+            })?;
+        match disposition {
+            FullFeatureDisposition::Response(response) => Ok(ConnectionOutput {
+                response: Some(response),
+                transition_after_send: false,
+            }),
+            FullFeatureDisposition::NoResponse => Ok(ConnectionOutput {
+                response: None,
+                transition_after_send: false,
+            }),
+            FullFeatureDisposition::CloseAfterResponse(response) => {
+                self.phase = ConnectionPhase::Logout;
+                self.pending_phase = Some(ConnectionPhase::Closed);
+                self.pending_close_reason = Some(ConnectionCloseReason::NormalLogout);
+                Ok(ConnectionOutput {
+                    response: Some(response),
+                    transition_after_send: true,
+                })
+            }
+            FullFeatureDisposition::CloseAfterReject(response) => {
+                self.phase = ConnectionPhase::Logout;
+                self.pending_phase = Some(ConnectionPhase::Closed);
+                self.pending_close_reason = Some(ConnectionCloseReason::ProtocolError);
+                Ok(ConnectionOutput {
+                    response: Some(response),
+                    transition_after_send: true,
+                })
+            }
+        }
     }
 
     fn protocol_error<T>(&mut self, error: ConnectionError) -> Result<T, ConnectionError> {
@@ -289,10 +388,16 @@ pub enum ConnectionError {
     InvalidLogoutReason(u8),
     #[error("Full Feature Phase has no sequence state")]
     MissingSequenceState,
+    #[error("Full Feature Phase has no control state")]
+    MissingFullFeatureState,
+    #[error("Text sequence limit {0} is outside the supported range")]
+    InvalidTextSequenceLimit(usize),
     #[error(transparent)]
     Login(#[from] TargetLoginError),
     #[error(transparent)]
     Sequence(#[from] SequenceError),
+    #[error(transparent)]
+    Control(#[from] crate::control_state::ControlError),
 }
 
 #[cfg(test)]
@@ -301,6 +406,10 @@ mod tests {
     use crate::control::LogoutRequest;
     use crate::login::{IscsiName, LoginRequest, TextParameters};
     use crate::login_policy::TargetLoginPolicy;
+    use crate::opcode::TaskAttribute;
+    use crate::scsi::ScsiCommand;
+    use crate::scsi_target::{MemoryBackend, ScsiTarget};
+    use bytes::Bytes;
 
     const INITIATOR: &str = "iqn.2024-01.com.example:initiator";
     const TARGET: &str = "iqn.2024-01.com.example:target";
@@ -353,6 +462,64 @@ mod tests {
         connection
     }
 
+    fn scsi_command(
+        cdb: [u8; 16],
+        read: bool,
+        expected: u32,
+        cmd_sn: u32,
+        exp_stat_sn: u32,
+    ) -> Pdu {
+        Pdu::ScsiCommand(ScsiCommand {
+            immediate: false,
+            final_: true,
+            read,
+            write: false,
+            attr: TaskAttribute::Simple,
+            lun: 0,
+            initiator_task_tag: cmd_sn,
+            expected_data_transfer_length: expected,
+            cmd_sn,
+            exp_stat_sn,
+            cdb,
+            immediate_data: Bytes::new(),
+        })
+    }
+
+    #[test]
+    fn full_feature_scsi_commands_dispatch_to_the_configured_lun() {
+        let mut connection = established_connection();
+        let mut target = ScsiTarget::default();
+        target.add_lun(0, MemoryBackend::new(512, 32).unwrap());
+        connection.set_scsi_target(target);
+
+        let mut inquiry = [0; 16];
+        inquiry[0] = 0x12;
+        inquiry[4] = 36;
+        let exp_stat_sn = connection.sequence().unwrap().next_stat_sn();
+        let output = connection
+            .receive(scsi_command(inquiry, true, 64, 11, exp_stat_sn))
+            .unwrap();
+        let Some(Pdu::ScsiDataIn(response)) = output.response else {
+            panic!("expected inquiry Data-In");
+        };
+        assert_eq!(response.status, 0);
+        assert_eq!(&response.data[8..16], b"RUSTISCS");
+        assert!(response.underflow);
+        assert_eq!(response.residual_count, 28);
+
+        let mut unsupported = [0; 16];
+        unsupported[0] = 0xff;
+        let exp_stat_sn = connection.sequence().unwrap().next_stat_sn();
+        let output = connection
+            .receive(scsi_command(unsupported, false, 0, 12, exp_stat_sn))
+            .unwrap();
+        let Some(Pdu::ScsiResponse(response)) = output.response else {
+            panic!("expected CHECK CONDITION");
+        };
+        assert_eq!(response.status, 0x02);
+        assert_eq!((response.sense[2], response.sense[12]), (0x05, 0x20));
+    }
+
     #[test]
     fn login_to_full_feature_and_logout_transition_after_responses_are_sent() {
         let mut connection = new_connection();
@@ -365,7 +532,7 @@ mod tests {
                 10,
             ))
             .unwrap();
-        assert!(matches!(output.response, Pdu::LoginResponse(_)));
+        assert!(matches!(output.response, Some(Pdu::LoginResponse(_))));
         assert_eq!(connection.phase(), ConnectionPhase::SecurityNegotiation);
         connection.response_sent().unwrap();
         assert_eq!(
@@ -394,6 +561,7 @@ mod tests {
 
         let output = connection
             .receive(Pdu::LogoutRequest(LogoutRequest {
+                immediate: true,
                 reason_code: 0,
                 initiator_task_tag: 9,
                 cid: 7,
@@ -401,7 +569,7 @@ mod tests {
                 exp_stat_sn: 2,
             }))
             .unwrap();
-        let Pdu::LogoutResponse(response) = output.response else {
+        let Some(Pdu::LogoutResponse(response)) = output.response else {
             panic!("expected LogoutResponse");
         };
         assert_eq!(response.stat_sn, 2);
@@ -419,6 +587,7 @@ mod tests {
         let mut connection = new_connection();
         let error = connection
             .receive(Pdu::LogoutRequest(LogoutRequest {
+                immediate: true,
                 reason_code: 0,
                 initiator_task_tag: 1,
                 cid: 7,
@@ -444,6 +613,7 @@ mod tests {
         let mut connection = established_connection();
         let error = connection
             .receive(Pdu::LogoutRequest(LogoutRequest {
+                immediate: true,
                 reason_code: 0,
                 initiator_task_tag: 1,
                 cid: 7,

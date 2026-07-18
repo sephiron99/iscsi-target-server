@@ -32,10 +32,12 @@ where
                 return Err(ConnectionIoError::UnexpectedAhs);
             }
             let response = connection.receive(frame.pdu)?;
-            codec.encode(response.response, &mut output)?;
-            stream.write_all(&output).await?;
-            stream.flush().await?;
-            output.clear();
+            if let Some(pdu) = response.response {
+                codec.encode(pdu, &mut output)?;
+                stream.write_all(&output).await?;
+                stream.flush().await?;
+                output.clear();
+            }
             if response.transition_after_send {
                 connection.response_sent()?;
                 codec = IscsiCodec::with_config(*connection.frame_config());
@@ -66,6 +68,16 @@ where
         let read = match timeout(duration, stream.read_buf(&mut input)).await {
             Ok(result) => result?,
             Err(_) => {
+                if timeout_kind == ConnectionTimeoutKind::Idle
+                    && !connection.has_pending_keepalive()
+                {
+                    let probe = connection.keepalive_probe(0)?;
+                    codec.encode(probe, &mut output)?;
+                    stream.write_all(&output).await?;
+                    stream.flush().await?;
+                    output.clear();
+                    continue;
+                }
                 connection.on_timeout(timeout_kind);
                 return connection
                     .close_reason()
@@ -99,13 +111,15 @@ pub enum ConnectionIoError {
 mod tests {
     use super::*;
     use crate::connection::ConnectionStateMachine;
-    use crate::control::{LogoutRequest, LogoutResponse};
+    use crate::control::{LogoutRequest, LogoutResponse, NopOut};
     use crate::login::{IscsiName, LoginRequest, LoginResponse, TextParameters};
     use crate::login_policy::TargetLoginPolicy;
     use crate::opcode::LoginStage;
     use crate::target_login::TargetLoginProcessor;
     use crate::Pdu;
     use tokio::net::{TcpListener, TcpStream};
+
+    use std::time::Duration;
 
     async fn exchange(
         stream: &mut TcpStream,
@@ -197,11 +211,109 @@ mod tests {
             &mut codec,
             &mut input,
             Pdu::LogoutRequest(LogoutRequest {
+                immediate: true,
                 reason_code: 0,
                 initiator_task_tag: 9,
                 cid: 7,
                 cmd_sn: 11,
                 exp_stat_sn: 2,
+            }),
+        )
+        .await;
+        assert!(matches!(
+            logout,
+            Pdu::LogoutResponse(LogoutResponse { response: 0, .. })
+        ));
+        assert_eq!(server.await.unwrap(), ConnectionCloseReason::NormalLogout);
+    }
+
+    #[tokio::test]
+    async fn idle_connection_uses_nop_keepalive_before_timing_out() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut policy = TargetLoginPolicy::default();
+            policy.set_target_name(IscsiName::parse("iqn.2024-01.com.example:target").unwrap());
+            let mut connection =
+                ConnectionStateMachine::new(TargetLoginProcessor::new(policy, 0x1234), 7, 4)
+                    .unwrap();
+            connection.set_timeouts(crate::connection::ConnectionTimeouts {
+                login: Duration::from_secs(1),
+                idle: Duration::from_millis(100),
+                logout: Duration::from_secs(1),
+            });
+            run_connection(stream, connection).await.unwrap()
+        });
+
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        let mut codec = IscsiCodec::new();
+        let mut input = BytesMut::new();
+        exchange(
+            &mut stream,
+            &mut codec,
+            &mut input,
+            login_request(
+                LoginStage::Security,
+                LoginStage::Operational,
+                b"InitiatorName=iqn.2024-01.com.example:initiator\0TargetName=iqn.2024-01.com.example:target\0AuthMethod=None\0",
+                10,
+            ),
+        )
+        .await;
+        exchange(
+            &mut stream,
+            &mut codec,
+            &mut input,
+            login_request(LoginStage::Operational, LoginStage::FullFeature, b"", 11),
+        )
+        .await;
+
+        let probe = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(frame) = codec.decode(&mut input).unwrap() {
+                    break frame.pdu;
+                }
+                let read = stream.read_buf(&mut input).await.unwrap();
+                assert_ne!(read, 0);
+            }
+        })
+        .await
+        .unwrap();
+        let Pdu::NopIn(probe) = probe else {
+            panic!("expected target NOP-In probe");
+        };
+        assert_eq!(probe.initiator_task_tag, u32::MAX);
+        assert_ne!(probe.target_transfer_tag, u32::MAX);
+
+        let mut output = BytesMut::new();
+        codec
+            .encode(
+                Pdu::NopOut(NopOut {
+                    immediate: true,
+                    lun: probe.lun,
+                    initiator_task_tag: u32::MAX,
+                    target_transfer_tag: probe.target_transfer_tag,
+                    cmd_sn: probe.exp_cmd_sn,
+                    exp_stat_sn: probe.stat_sn,
+                    data: bytes::Bytes::new(),
+                }),
+                &mut output,
+            )
+            .unwrap();
+        stream.write_all(&output).await.unwrap();
+
+        let logout = exchange(
+            &mut stream,
+            &mut codec,
+            &mut input,
+            Pdu::LogoutRequest(LogoutRequest {
+                immediate: true,
+                reason_code: 0,
+                initiator_task_tag: 9,
+                cid: 7,
+                cmd_sn: probe.exp_cmd_sn,
+                exp_stat_sn: probe.stat_sn,
             }),
         )
         .await;
