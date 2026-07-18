@@ -21,6 +21,7 @@ pub mod error;
 pub mod frame;
 pub mod login;
 pub mod login_policy;
+pub mod management;
 pub mod negotiation;
 pub mod opcode;
 pub mod platform;
@@ -68,13 +69,17 @@ pub use login_policy::{
     AuthenticationPolicy, DigestPolicy, ErrorRecoveryLevel, TargetLoginPolicy,
     TargetLoginPolicyError, TaskReporting,
 };
+pub use management::{ManagementError, TargetServiceApi, TargetStatus};
 pub use negotiation::{
     LoginContinuationError, LoginSide, LoginTransitionError, NegotiatedFrameParameters,
     NegotiationError, TargetLoginNegotiation, DEFAULT_MAX_LOGIN_TEXT_SEQUENCE_LENGTH,
     MIN_LOGIN_TEXT_SEQUENCE_LENGTH, MIN_MAX_RECV_DATA_SEGMENT_LENGTH,
 };
 pub use opcode::Opcode;
-pub use scsi_target::{StorageError, StorageIoError, StorageIoOperation};
+pub use scsi_target::{
+    LunInfo, SharedScsiTarget, SharedScsiTargetError, StorageError, StorageIoError,
+    StorageIoOperation,
+};
 pub use serial::{SequenceError, SequenceState, SerialNumber32};
 pub use session::{
     Session, SessionBinding, SessionError, SessionId, SessionIdentity, SessionRegistry,

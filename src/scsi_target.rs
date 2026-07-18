@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 
@@ -372,6 +373,95 @@ pub struct ScsiTarget {
     max_transfer_length: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct SharedScsiTarget {
+    inner: Arc<Mutex<ScsiTarget>>,
+}
+
+impl SharedScsiTarget {
+    pub fn new(target: ScsiTarget) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(target)),
+        }
+    }
+
+    pub fn add_lun(
+        &self,
+        lun: u64,
+        backend: impl StorageBackend + 'static,
+    ) -> Result<(), SharedScsiTargetError> {
+        self.add_boxed_lun(lun, Box::new(backend))
+    }
+
+    pub fn add_boxed_lun(
+        &self,
+        lun: u64,
+        backend: Box<dyn StorageBackend>,
+    ) -> Result<(), SharedScsiTargetError> {
+        let mut target = self.lock()?;
+        if target.luns.contains_key(&lun) {
+            return Err(SharedScsiTargetError::DuplicateLun(lun));
+        }
+        target.add_boxed_lun(lun, backend);
+        Ok(())
+    }
+
+    pub fn remove_lun(&self, lun: u64) -> Result<bool, SharedScsiTargetError> {
+        Ok(self.lock()?.remove_lun(lun).is_some())
+    }
+
+    pub fn lun_info(&self) -> Result<Vec<LunInfo>, SharedScsiTargetError> {
+        Ok(self.lock()?.lun_info())
+    }
+
+    pub fn max_transfer_length(&self) -> Result<usize, SharedScsiTargetError> {
+        Ok(self.lock()?.max_transfer_length())
+    }
+
+    pub fn execute(
+        &self,
+        lun: u64,
+        cdb: &[u8; 16],
+        data_out: &[u8],
+    ) -> Result<ScsiExecution, SharedScsiTargetError> {
+        Ok(self.lock()?.execute(lun, cdb, data_out))
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, ScsiTarget>, SharedScsiTargetError> {
+        self.inner
+            .lock()
+            .map_err(|_| SharedScsiTargetError::Poisoned)
+    }
+}
+
+impl Default for SharedScsiTarget {
+    fn default() -> Self {
+        Self::new(ScsiTarget::default())
+    }
+}
+
+impl From<ScsiTarget> for SharedScsiTarget {
+    fn from(target: ScsiTarget) -> Self {
+        Self::new(target)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SharedScsiTargetError {
+    #[error("shared SCSI Target state is poisoned")]
+    Poisoned,
+    #[error("shared SCSI Target already contains LUN {0}")]
+    DuplicateLun(u64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LunInfo {
+    pub lun: u64,
+    pub block_size: u32,
+    pub block_count: u64,
+    pub read_only: bool,
+}
+
 impl Default for ScsiTarget {
     fn default() -> Self {
         Self {
@@ -387,11 +477,19 @@ impl ScsiTarget {
         lun: u64,
         backend: impl StorageBackend + 'static,
     ) -> Option<Box<dyn StorageBackend>> {
+        self.add_boxed_lun(lun, Box::new(backend))
+    }
+
+    pub fn add_boxed_lun(
+        &mut self,
+        lun: u64,
+        backend: Box<dyn StorageBackend>,
+    ) -> Option<Box<dyn StorageBackend>> {
         self.luns
             .insert(
                 lun,
                 Lun {
-                    backend: Box::new(backend),
+                    backend,
                     last_sense: Bytes::new(),
                 },
             )
@@ -412,6 +510,18 @@ impl ScsiTarget {
 
     pub fn max_transfer_length(&self) -> usize {
         self.max_transfer_length
+    }
+
+    pub fn lun_info(&self) -> Vec<LunInfo> {
+        self.luns
+            .iter()
+            .map(|(lun, device)| LunInfo {
+                lun: *lun,
+                block_size: device.backend.block_size(),
+                block_count: device.backend.block_count(),
+                read_only: device.backend.read_only(),
+            })
+            .collect()
     }
 
     pub fn execute(&mut self, lun: u64, cdb: &[u8; 16], data_out: &[u8]) -> ScsiExecution {

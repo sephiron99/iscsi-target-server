@@ -219,6 +219,14 @@ impl TargetConfig {
         Ok(())
     }
 
+    pub fn remove_lun(&mut self, lun: u64) -> bool {
+        let Some(index) = self.luns.iter().position(|existing| existing.lun == lun) else {
+            return false;
+        };
+        self.luns.remove(index);
+        true
+    }
+
     pub fn login_policy(&self) -> TargetLoginPolicy {
         let mut policy = TargetLoginPolicy::default();
         policy.set_target_name(self.name.clone());

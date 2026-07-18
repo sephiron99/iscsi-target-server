@@ -6,7 +6,7 @@ use crate::control_state::{DiscoveryTarget, FullFeatureDisposition, FullFeatureS
 use crate::frame::FrameConfig;
 use crate::negotiation::NegotiatedFrameParameters;
 use crate::opcode::LoginStage;
-use crate::scsi_target::ScsiTarget;
+use crate::scsi_target::{ScsiTarget, SharedScsiTarget};
 use crate::serial::{SequenceError, SequenceState};
 use crate::target_login::{TargetLoginError, TargetLoginProcessor};
 use crate::Pdu;
@@ -82,7 +82,7 @@ pub struct ConnectionStateMachine {
     discovery_targets: Vec<DiscoveryTarget>,
     max_text_sequence_length: usize,
     full_feature: Option<FullFeatureState>,
-    scsi_target: Option<ScsiTarget>,
+    scsi_target: Option<SharedScsiTarget>,
 }
 
 impl ConnectionStateMachine {
@@ -161,6 +161,10 @@ impl ConnectionStateMachine {
     }
 
     pub fn set_scsi_target(&mut self, target: ScsiTarget) {
+        self.set_shared_scsi_target(target.into());
+    }
+
+    pub fn set_shared_scsi_target(&mut self, target: SharedScsiTarget) {
         self.scsi_target = Some(target);
     }
 
@@ -356,7 +360,7 @@ impl ConnectionStateMachine {
                 sequence,
                 cid,
                 self.frame_config.max_send_data_segment_length(),
-                self.scsi_target.as_mut(),
+                self.scsi_target.as_ref(),
             )
             .map_err(|error| match error {
                 crate::control_state::ControlError::Sequence(source) => {

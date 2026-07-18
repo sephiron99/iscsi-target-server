@@ -11,7 +11,9 @@ use crate::control::{
 use crate::login::{IscsiName, SessionType, TextParameterError, TextParameters};
 use crate::opcode::TaskMgmtFunction;
 use crate::scsi::{R2t, ScsiCommand, ScsiDataIn, ScsiDataOut, ScsiResponse};
-use crate::scsi_target::{ScsiExecution, ScsiTarget, STATUS_CHECK_CONDITION, STATUS_GOOD};
+use crate::scsi_target::{
+    ScsiExecution, SharedScsiTarget, SharedScsiTargetError, STATUS_CHECK_CONDITION, STATUS_GOOD,
+};
 use crate::serial::{SequenceError, SequenceState};
 use crate::target_login::NegotiatedDataParameters;
 use crate::Pdu;
@@ -212,7 +214,7 @@ impl FullFeatureState {
         sequence: &mut SequenceState,
         cid: u16,
         max_response_segment_length: usize,
-        scsi_target: Option<&mut ScsiTarget>,
+        scsi_target: Option<&SharedScsiTarget>,
     ) -> Result<FullFeatureDisposition, ControlError> {
         let rejected_header = rejected_header(&pdu);
         match pdu {
@@ -338,7 +340,7 @@ impl FullFeatureState {
         request: ScsiCommand,
         sequence: &mut SequenceState,
         max_response_segment_length: usize,
-        scsi_target: Option<&mut ScsiTarget>,
+        scsi_target: Option<&SharedScsiTarget>,
         rejected_header: Bytes,
     ) -> Result<FullFeatureDisposition, ControlError> {
         observe_request(
@@ -356,7 +358,7 @@ impl FullFeatureState {
         };
 
         if !request.write {
-            let result = target.execute(request.lun, &request.cdb, &request.immediate_data);
+            let result = target.execute(request.lun, &request.cdb, &request.immediate_data)?;
             let actual_length = result.data.len();
             return Ok(command_result(
                 CommandCompletion {
@@ -386,7 +388,7 @@ impl FullFeatureState {
 
         let expected_length = request.expected_data_transfer_length as usize;
         let immediate_length = request.immediate_data.len();
-        if expected_length > target.max_transfer_length()
+        if expected_length > target.max_transfer_length()?
             || immediate_length > expected_length
             || immediate_length > self.data_parameters.first_burst_length as usize
         {
@@ -404,7 +406,7 @@ impl FullFeatureState {
                     sequence,
                 )));
             }
-            let result = target.execute(request.lun, &request.cdb, &request.immediate_data);
+            let result = target.execute(request.lun, &request.cdb, &request.immediate_data)?;
             let actual_length = if result.status == STATUS_GOOD {
                 expected_length
             } else {
@@ -456,7 +458,7 @@ impl FullFeatureState {
         &mut self,
         request: ScsiDataOut,
         sequence: &mut SequenceState,
-        scsi_target: Option<&mut ScsiTarget>,
+        scsi_target: Option<&SharedScsiTarget>,
         rejected_header: Bytes,
     ) -> Result<FullFeatureDisposition, ControlError> {
         let Some(pending) = self.pending_writes.get(&request.initiator_task_tag) else {
@@ -505,7 +507,7 @@ impl FullFeatureState {
         let Some(target) = scsi_target else {
             return Ok(invalid_data_out(rejected_header, sequence));
         };
-        let result = target.execute(pending.lun, &pending.cdb, &pending.data);
+        let result = target.execute(pending.lun, &pending.cdb, &pending.data)?;
         let actual_length = if result.status == STATUS_GOOD {
             pending.expected_length
         } else {
@@ -1075,6 +1077,8 @@ pub enum ControlError {
     Text(#[from] TextParameterError),
     #[error(transparent)]
     Sequence(#[from] SequenceError),
+    #[error(transparent)]
+    SharedScsiTarget(#[from] SharedScsiTargetError),
 }
 
 #[cfg(test)]
@@ -1082,7 +1086,7 @@ mod tests {
     use super::*;
     use crate::control::{LogoutRequest, NopOut, TaskMgmtRequest, TextRequest};
     use crate::opcode::TaskAttribute;
-    use crate::scsi_target::MemoryBackend;
+    use crate::scsi_target::{MemoryBackend, ScsiTarget, SharedScsiTarget};
 
     const TARGET: &str = "iqn.2024-01.com.example:target";
 
@@ -1335,6 +1339,7 @@ mod tests {
         });
         let mut target = ScsiTarget::default();
         target.add_lun(0, MemoryBackend::new(512, 8).unwrap());
+        let target = SharedScsiTarget::from(target);
         let mut sequence = SequenceState::new(10, 0, 4).unwrap();
         let mut cdb = [0; 16];
         cdb[0] = 0x2a;
@@ -1354,7 +1359,7 @@ mod tests {
             immediate_data: Bytes::new(),
         });
         let FullFeatureDisposition::Response(Pdu::R2t(first)) = state
-            .receive_with_scsi(command, &mut sequence, 1, 8192, Some(&mut target))
+            .receive_with_scsi(command, &mut sequence, 1, 8192, Some(&target))
             .unwrap()
         else {
             panic!("expected first R2T");
@@ -1383,7 +1388,7 @@ mod tests {
                 &mut sequence,
                 1,
                 8192,
-                Some(&mut target),
+                Some(&target),
             )
             .unwrap()
         else {
@@ -1414,7 +1419,7 @@ mod tests {
                 &mut sequence,
                 1,
                 8192,
-                Some(&mut target),
+                Some(&target),
             )
             .unwrap();
         assert!(matches!(
@@ -1440,6 +1445,7 @@ mod tests {
         });
         let mut target = ScsiTarget::default();
         target.add_lun(0, MemoryBackend::new(512, 8).unwrap());
+        let target = SharedScsiTarget::from(target);
         let mut sequence = SequenceState::new(10, 0, 4).unwrap();
         let mut cdb = [0; 16];
         cdb[0] = 0x2a;
@@ -1460,7 +1466,7 @@ mod tests {
         });
         assert!(matches!(
             state
-                .receive_with_scsi(command, &mut sequence, 1, 8192, Some(&mut target))
+                .receive_with_scsi(command, &mut sequence, 1, 8192, Some(&target))
                 .unwrap(),
             FullFeatureDisposition::NoResponse
         ));
@@ -1479,7 +1485,7 @@ mod tests {
                 &mut sequence,
                 1,
                 8192,
-                Some(&mut target),
+                Some(&target),
             )
             .unwrap();
         assert!(matches!(
@@ -1498,6 +1504,7 @@ mod tests {
         );
         let mut target = ScsiTarget::default();
         target.add_lun(0, MemoryBackend::new(512, 8).unwrap());
+        let target = SharedScsiTarget::from(target);
         let mut sequence = SequenceState::new(10, 7, 4).unwrap();
         let mut cdb = [0; 16];
         cdb[0] = 0x28;
@@ -1522,7 +1529,7 @@ mod tests {
                 &mut sequence,
                 1,
                 300,
-                Some(&mut target),
+                Some(&target),
             )
             .unwrap();
         let FullFeatureDisposition::ResponseSequence(responses) = disposition else {
@@ -1566,6 +1573,7 @@ mod tests {
         );
         let mut target = ScsiTarget::default();
         target.add_lun(0, MemoryBackend::new(512, 8).unwrap());
+        let target = SharedScsiTarget::from(target);
         let mut sequence = SequenceState::new(10, 0, 4).unwrap();
         let mut cdb = [0; 16];
         cdb[0] = 0x12;
@@ -1590,7 +1598,7 @@ mod tests {
                 &mut sequence,
                 1,
                 512,
-                Some(&mut target),
+                Some(&target),
             )
             .unwrap();
         let FullFeatureDisposition::Response(Pdu::ScsiDataIn(response)) = disposition else {
