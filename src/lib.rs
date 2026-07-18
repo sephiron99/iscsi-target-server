@@ -34,6 +34,7 @@ pub mod target_login;
 // 순수 PDU 파싱/직렬화만 쓰는 경우 Tokio 의존성 없이 사용 가능.
 #[cfg(feature = "codec")]
 pub mod codec;
+pub mod config;
 #[cfg(feature = "codec")]
 pub mod connection_io;
 #[cfg(feature = "codec")]
@@ -41,6 +42,10 @@ pub mod target_service;
 
 pub use auth::{ChapCredentials, ChapError, ChapExchange};
 pub use bhs::{Bhs, BHS_LEN};
+pub use config::{
+    AuthenticationConfig, ChapAuthenticationConfig, ConfigError, DaemonConfig, ListenConfig,
+    LunBackendConfig, LunConfig, TargetConfig,
+};
 pub use connection::{
     ConnectionCloseReason, ConnectionError, ConnectionOutput, ConnectionPhase,
     ConnectionStateMachine, ConnectionTimeoutKind, ConnectionTimeouts,

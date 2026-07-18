@@ -21,15 +21,7 @@ pub struct ChapCredentials {
 
 impl ChapCredentials {
     pub fn new(username: String, secret: Vec<u8>) -> Result<Self, ChapError> {
-        if username.is_empty() || username.as_bytes().contains(&0) {
-            return Err(ChapError::InvalidUsername);
-        }
-        if secret.is_empty() || secret.len() > MAX_CHAP_BINARY_LENGTH {
-            return Err(ChapError::InvalidSecretLength {
-                len: secret.len(),
-                max: MAX_CHAP_BINARY_LENGTH,
-            });
-        }
+        validate_credentials(&username, &secret)?;
         Ok(Self {
             username,
             secret: Zeroizing::new(secret),
@@ -39,6 +31,19 @@ impl ChapCredentials {
     pub fn username(&self) -> &str {
         &self.username
     }
+}
+
+pub(crate) fn validate_credentials(username: &str, secret: &[u8]) -> Result<(), ChapError> {
+    if username.is_empty() || username.as_bytes().contains(&0) {
+        return Err(ChapError::InvalidUsername);
+    }
+    if secret.is_empty() || secret.len() > MAX_CHAP_BINARY_LENGTH {
+        return Err(ChapError::InvalidSecretLength {
+            len: secret.len(),
+            max: MAX_CHAP_BINARY_LENGTH,
+        });
+    }
+    Ok(())
 }
 
 impl fmt::Debug for ChapCredentials {
