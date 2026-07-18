@@ -35,6 +35,7 @@
 - [x] Login text 원문 보존, 조각 누적과 stage 전환 경계 테스트 보강
 - [x] Digest와 `MaxRecvDataSegmentLength` 협상 결과가 성공 시점에만 원자적으로 적용되는지 확인
 - [x] 오류 타입과 공개 API 이름 검토
+
 - [x] no-default/all-features 테스트, clippy와 format 검증
 - [x] 현재 변경을 하나의 집중된 commit으로 정리
 
@@ -135,15 +136,15 @@
 
 ## 7. Storage backend
 
-- [ ] capacity, block size, read, write, flush, read-only 상태를 제공하는 backend trait
-- [ ] 정렬, 범위, short I/O와 동시 접근 규칙
-- [ ] 테스트용 memory backend
-- [ ] raw IMG/file backend와 파일 크기 기반 LUN 생성
-- [ ] sparse file 및 durable flush 정책
-- [ ] read-only LUN과 write protection sense 처리
+- [x] capacity, block size, read, write, flush, read-only 상태를 제공하는 backend trait
+- [x] 정렬, 범위, short I/O와 동시 접근 규칙
+- [x] 테스트용 memory backend
+- [x] raw IMG/file backend와 파일 크기 기반 LUN 생성
+- [x] sparse file 및 durable flush 정책
+- [x] read-only LUN과 write protection sense 처리
 - [ ] VHD/VMDK 지원 범위와 외부 라이브러리 도입 여부 조사
-- [ ] Windows physical disk/volume backend를 별도 platform 모듈로 격리
-- [ ] backend 오류를 SCSI sense로 변환하는 규칙
+- [x] Windows physical disk/volume backend를 별도 platform 모듈로 격리
+- [x] backend 오류를 SCSI sense로 변환하는 규칙
 
 완료 조건:
 
@@ -220,6 +221,7 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 - [ ] allocation, outstanding command와 queue 상한 검증
 - [ ] 로그의 secret/raw payload 노출 감사
 - [ ] I/O 오류, full disk, read-only와 backend 제거 시나리오
+- [ ] 실제 Windows 10/11에서 physical disk/volume 조회, lock, read/write/flush 검증
 - [ ] 지원 범위와 알려진 제한 문서화
 
 완료 조건:

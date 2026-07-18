@@ -17,6 +17,14 @@ zeroize = "1.8"
 tokio-util = { version = "0.7", features = ["codec"], optional = true }
 tokio = { version = "1", features = ["io-util", "net", "time"], optional = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+] }
+
 [features]
 default = []
 # tokio 기반 Framed codec (IscsiCodec) 활성화

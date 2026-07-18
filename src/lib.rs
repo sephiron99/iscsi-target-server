@@ -23,6 +23,7 @@ pub mod login;
 pub mod login_policy;
 pub mod negotiation;
 pub mod opcode;
+pub mod platform;
 pub mod scsi;
 pub mod scsi_target;
 pub mod serial;

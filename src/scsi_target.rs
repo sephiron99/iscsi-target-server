@@ -1,6 +1,9 @@
 //! SCSI CDB 실행과 Storage backend 경계.
 
 use std::collections::BTreeMap;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::Path;
 
 use bytes::Bytes;
 
@@ -16,6 +19,8 @@ const SENSE_DATA_PROTECT: u8 = 0x07;
 pub enum StorageError {
     #[error("block range is outside the backend")]
     OutOfRange,
+    #[error("I/O length is not aligned to the backend block size")]
+    Misaligned,
     #[error("backend is read-only")]
     ReadOnly,
     #[error("backend I/O failed")]
@@ -41,13 +46,7 @@ pub struct MemoryBackend {
 
 impl MemoryBackend {
     pub fn new(block_size: u32, block_count: u64) -> Result<Self, StorageError> {
-        if block_size == 0 || block_count == 0 {
-            return Err(StorageError::OutOfRange);
-        }
-        let length = u64::from(block_size)
-            .checked_mul(block_count)
-            .and_then(|value| usize::try_from(value).ok())
-            .ok_or(StorageError::OutOfRange)?;
+        let length = storage_length_usize(block_size, block_count)?;
         Ok(Self {
             block_size,
             data: vec![0; length],
@@ -93,6 +92,161 @@ impl StorageBackend for MemoryBackend {
     }
 }
 
+#[derive(Debug)]
+pub struct FileBackend {
+    file: File,
+    block_size: u32,
+    block_count: u64,
+    read_only: bool,
+    durable_flush: bool,
+}
+
+impl FileBackend {
+    pub fn open_read_write(path: impl AsRef<Path>, block_size: u32) -> Result<Self, StorageError> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|_| StorageError::Io)?;
+        Self::from_file(file, block_size, false)
+    }
+
+    pub fn open_read_only(path: impl AsRef<Path>, block_size: u32) -> Result<Self, StorageError> {
+        let file = OpenOptions::new()
+            .read(true)
+            .open(path)
+            .map_err(|_| StorageError::Io)?;
+        Self::from_file(file, block_size, true)
+    }
+
+    pub fn create_sparse(
+        path: impl AsRef<Path>,
+        block_size: u32,
+        block_count: u64,
+    ) -> Result<Self, StorageError> {
+        let length = storage_length(block_size, block_count)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .map_err(|_| StorageError::Io)?;
+        file.set_len(length).map_err(|_| StorageError::Io)?;
+        Self::from_file(file, block_size, false)
+    }
+
+    pub fn from_file(file: File, block_size: u32, read_only: bool) -> Result<Self, StorageError> {
+        validate_block_geometry(block_size, 1)?;
+        let length = file.metadata().map_err(|_| StorageError::Io)?.len();
+        if length == 0 {
+            return Err(StorageError::OutOfRange);
+        }
+        if length % u64::from(block_size) != 0 {
+            return Err(StorageError::Misaligned);
+        }
+        Ok(Self {
+            file,
+            block_size,
+            block_count: length / u64::from(block_size),
+            read_only,
+            durable_flush: true,
+        })
+    }
+
+    pub fn set_durable_flush(&mut self, value: bool) {
+        self.durable_flush = value;
+    }
+
+    pub fn durable_flush(&self) -> bool {
+        self.durable_flush
+    }
+}
+
+impl StorageBackend for FileBackend {
+    fn block_size(&self) -> u32 {
+        self.block_size
+    }
+
+    fn block_count(&self) -> u64 {
+        self.block_count
+    }
+
+    fn read_only(&self) -> bool {
+        self.read_only
+    }
+
+    fn read_blocks(&mut self, lba: u64, output: &mut [u8]) -> Result<(), StorageError> {
+        let offset = block_io_offset(lba, output.len(), self.block_size, self.block_count)?;
+        self.file
+            .seek(SeekFrom::Start(offset))
+            .map_err(|_| StorageError::Io)?;
+        self.file.read_exact(output).map_err(|_| StorageError::Io)?;
+        Ok(())
+    }
+
+    fn write_blocks(&mut self, lba: u64, input: &[u8]) -> Result<(), StorageError> {
+        if self.read_only {
+            return Err(StorageError::ReadOnly);
+        }
+        let offset = block_io_offset(lba, input.len(), self.block_size, self.block_count)?;
+        self.file
+            .seek(SeekFrom::Start(offset))
+            .map_err(|_| StorageError::Io)?;
+        self.file.write_all(input).map_err(|_| StorageError::Io)?;
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), StorageError> {
+        self.file.flush().map_err(|_| StorageError::Io)?;
+        if self.durable_flush {
+            self.file.sync_all().map_err(|_| StorageError::Io)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_block_geometry(block_size: u32, block_count: u64) -> Result<(), StorageError> {
+    if block_size == 0 || block_count == 0 {
+        return Err(StorageError::OutOfRange);
+    }
+    Ok(())
+}
+
+fn storage_length(block_size: u32, block_count: u64) -> Result<u64, StorageError> {
+    validate_block_geometry(block_size, block_count)?;
+    u64::from(block_size)
+        .checked_mul(block_count)
+        .ok_or(StorageError::OutOfRange)
+}
+
+fn storage_length_usize(block_size: u32, block_count: u64) -> Result<usize, StorageError> {
+    storage_length(block_size, block_count)
+        .and_then(|value| usize::try_from(value).map_err(|_| StorageError::OutOfRange))
+}
+
+pub(crate) fn block_io_offset(
+    lba: u64,
+    length: usize,
+    block_size: u32,
+    block_count: u64,
+) -> Result<u64, StorageError> {
+    validate_block_geometry(block_size, block_count)?;
+    if !length.is_multiple_of(block_size as usize) {
+        return Err(StorageError::Misaligned);
+    }
+    let transfer_blocks =
+        u64::try_from(length / block_size as usize).map_err(|_| StorageError::OutOfRange)?;
+    let end_lba = lba
+        .checked_add(transfer_blocks)
+        .ok_or(StorageError::OutOfRange)?;
+    if end_lba > block_count {
+        return Err(StorageError::OutOfRange);
+    }
+    lba.checked_mul(u64::from(block_size))
+        .ok_or(StorageError::OutOfRange)
+}
+
 fn byte_range(
     lba: u64,
     length: usize,
@@ -100,7 +254,7 @@ fn byte_range(
     capacity: usize,
 ) -> Result<std::ops::Range<usize>, StorageError> {
     if !length.is_multiple_of(block_size as usize) {
-        return Err(StorageError::OutOfRange);
+        return Err(StorageError::Misaligned);
     }
     let start = lba
         .checked_mul(u64::from(block_size))
@@ -443,6 +597,7 @@ fn validated_transfer(
 fn storage_error(error: StorageError) -> ScsiExecution {
     match error {
         StorageError::OutOfRange => check_condition(SENSE_ILLEGAL_REQUEST, 0x21, 0x00),
+        StorageError::Misaligned => check_condition(SENSE_ILLEGAL_REQUEST, 0x1a, 0x00),
         StorageError::ReadOnly => check_condition(SENSE_DATA_PROTECT, 0x27, 0x00),
         StorageError::Io => check_condition(0x03, 0x11, 0x00),
     }
@@ -495,6 +650,8 @@ fn be_u64(value: &[u8; 16], offset: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn target() -> ScsiTarget {
         let mut target = ScsiTarget::default();
@@ -626,5 +783,81 @@ mod tests {
         let second = target.execute(0, &request, &[]);
         assert_eq!((first.data[2], first.data[12]), (5, 0x20));
         assert_eq!(second.data[2], SENSE_NO_SENSE);
+    }
+
+    #[test]
+    fn memory_backend_rejects_unaligned_and_out_of_range_io() {
+        let mut backend = MemoryBackend::new(512, 1).unwrap();
+        let mut unaligned = [0; 511];
+        assert_eq!(
+            backend.read_blocks(0, &mut unaligned),
+            Err(StorageError::Misaligned)
+        );
+        assert_eq!(
+            backend.write_blocks(1, &[0; 512]),
+            Err(StorageError::OutOfRange)
+        );
+    }
+
+    #[test]
+    fn file_backend_uses_file_size_and_persists_blocks() {
+        let path = temp_image_path("rw");
+        {
+            let mut backend = FileBackend::create_sparse(&path, 512, 2).unwrap();
+            backend.set_durable_flush(false);
+            assert_eq!(backend.block_count(), 2);
+            backend.write_blocks(1, &[0x6d; 512]).unwrap();
+            backend.flush().unwrap();
+        }
+        {
+            let mut target = ScsiTarget::default();
+            target.add_lun(0, FileBackend::open_read_write(&path, 512).unwrap());
+            let mut capacity = [0; 16];
+            capacity[0] = 0x25;
+            assert_eq!(
+                target.execute(0, &capacity, &[]).data.as_ref(),
+                &[0, 0, 0, 1, 0, 0, 2, 0]
+            );
+
+            let mut read = [0; 16];
+            read[0] = 0x28;
+            read[5] = 1;
+            read[8] = 1;
+            assert_eq!(target.execute(0, &read, &[]).data.as_ref(), &[0x6d; 512]);
+        }
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn file_backend_rejects_unaligned_images_and_read_only_writes() {
+        let unaligned = temp_image_path("unaligned");
+        fs::write(&unaligned, [0; 513]).unwrap();
+        assert_eq!(
+            FileBackend::open_read_write(&unaligned, 512).unwrap_err(),
+            StorageError::Misaligned
+        );
+        fs::remove_file(unaligned).unwrap();
+
+        let path = temp_image_path("ro");
+        FileBackend::create_sparse(&path, 512, 1).unwrap();
+        let mut target = ScsiTarget::default();
+        target.add_lun(0, FileBackend::open_read_only(&path, 512).unwrap());
+        let mut write = [0; 16];
+        write[0] = 0x2a;
+        write[8] = 1;
+        let result = target.execute(0, &write, &[0; 512]);
+        assert_eq!((result.sense[2], result.sense[12]), (7, 0x27));
+        fs::remove_file(path).unwrap();
+    }
+
+    fn temp_image_path(label: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "iscsi-target-server-{label}-{}-{unique}.img",
+            std::process::id()
+        ))
     }
 }
