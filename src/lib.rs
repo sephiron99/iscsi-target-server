@@ -68,7 +68,9 @@ pub use session::{
     Session, SessionBinding, SessionError, SessionId, SessionIdentity, SessionRegistry,
     SessionRegistryLimits,
 };
-pub use target_login::{TargetLoginError, TargetLoginOutcome, TargetLoginProcessor};
+pub use target_login::{
+    NegotiatedDataParameters, TargetLoginError, TargetLoginOutcome, TargetLoginProcessor,
+};
 
 use bytes::{BufMut, Bytes, BytesMut};
 

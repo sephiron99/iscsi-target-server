@@ -119,12 +119,12 @@
 
 ## 6. iSCSI Data 전송 경로
 
-- [ ] Immediate Data 처리
-- [ ] InitialR2T와 unsolicited Data-Out 정책
-- [ ] R2T 발행, `TTT`, `R2TSN`과 burst 추적
-- [ ] Data-Out의 `DataSN`, `BufferOffset`, final bit와 중복/누락 검증
+- [x] Immediate Data 처리
+- [x] InitialR2T와 unsolicited Data-Out 정책
+- [x] R2T 발행, `TTT`, `R2TSN`과 burst 추적
+- [x] Data-Out의 `DataSN`, `BufferOffset`, final bit와 중복/누락 검증
 - [ ] Data-In segment 분할, `DataSN`, status 동봉과 residual 처리
-- [ ] `FirstBurstLength`, `MaxBurstLength`, `MaxOutstandingR2T` 적용
+- [x] `FirstBurstLength`, `MaxBurstLength`, `MaxOutstandingR2T` 적용
 - [ ] `DataPDUInOrder`, `DataSequenceInOrder` 지원 범위 결정
 - [ ] backpressure와 connection별 buffered byte 상한
 

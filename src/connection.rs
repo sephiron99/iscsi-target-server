@@ -299,6 +299,7 @@ impl ConnectionStateMachine {
                         targets,
                     );
                     full_feature.set_max_text_sequence_length(self.max_text_sequence_length);
+                    full_feature.set_data_parameters(self.login.data_parameters());
                     self.full_feature = Some(full_feature);
                     ConnectionPhase::FullFeaturePhase
                 }
@@ -407,7 +408,7 @@ mod tests {
     use crate::login::{IscsiName, LoginRequest, TextParameters};
     use crate::login_policy::TargetLoginPolicy;
     use crate::opcode::TaskAttribute;
-    use crate::scsi::ScsiCommand;
+    use crate::scsi::{ScsiCommand, ScsiDataOut};
     use crate::scsi_target::{MemoryBackend, ScsiTarget};
     use bytes::Bytes;
 
@@ -518,6 +519,101 @@ mod tests {
         };
         assert_eq!(response.status, 0x02);
         assert_eq!((response.sense[2], response.sense[12]), (0x05, 0x20));
+    }
+
+    #[test]
+    fn initial_r2t_write_validates_data_out_and_commits_on_final_segment() {
+        let mut connection = established_connection();
+        let mut target = ScsiTarget::default();
+        target.add_lun(0, MemoryBackend::new(512, 32).unwrap());
+        connection.set_scsi_target(target);
+
+        let mut cdb = [0; 16];
+        cdb[0] = 0x2a;
+        cdb[8] = 2;
+        let exp_stat_sn = connection.sequence().unwrap().next_stat_sn();
+        let output = connection
+            .receive(Pdu::ScsiCommand(ScsiCommand {
+                immediate: false,
+                final_: true,
+                read: false,
+                write: true,
+                attr: TaskAttribute::Simple,
+                lun: 0,
+                initiator_task_tag: 0x55,
+                expected_data_transfer_length: 1024,
+                cmd_sn: 11,
+                exp_stat_sn,
+                cdb,
+                immediate_data: Bytes::new(),
+            }))
+            .unwrap();
+        let Some(Pdu::R2t(r2t)) = output.response else {
+            panic!("expected R2T");
+        };
+        assert_ne!(r2t.target_transfer_tag, u32::MAX);
+        assert_eq!(
+            (r2t.buffer_offset, r2t.desired_data_transfer_length),
+            (0, 1024)
+        );
+
+        let invalid = connection
+            .receive(Pdu::ScsiDataOut(ScsiDataOut {
+                final_: false,
+                lun: 0,
+                initiator_task_tag: 0x55,
+                target_transfer_tag: u32::MAX,
+                exp_stat_sn,
+                data_sn: 0,
+                buffer_offset: 0,
+                data: Bytes::from(vec![0x5a; 512]),
+            }))
+            .unwrap();
+        assert!(matches!(invalid.response, Some(Pdu::Reject(_))));
+
+        let exp_stat_sn = connection.sequence().unwrap().next_stat_sn();
+        let first = connection
+            .receive(Pdu::ScsiDataOut(ScsiDataOut {
+                final_: false,
+                lun: 0,
+                initiator_task_tag: 0x55,
+                target_transfer_tag: r2t.target_transfer_tag,
+                exp_stat_sn,
+                data_sn: 0,
+                buffer_offset: 0,
+                data: Bytes::from(vec![0x5a; 512]),
+            }))
+            .unwrap();
+        assert!(first.response.is_none());
+
+        let final_output = connection
+            .receive(Pdu::ScsiDataOut(ScsiDataOut {
+                final_: true,
+                lun: 0,
+                initiator_task_tag: 0x55,
+                target_transfer_tag: r2t.target_transfer_tag,
+                exp_stat_sn,
+                data_sn: 1,
+                buffer_offset: 512,
+                data: Bytes::from(vec![0xa5; 512]),
+            }))
+            .unwrap();
+        let Some(Pdu::ScsiResponse(response)) = final_output.response else {
+            panic!("expected final SCSI Response");
+        };
+        assert_eq!(response.status, 0);
+        assert_eq!(response.residual_count, 0);
+
+        cdb[0] = 0x28;
+        let exp_stat_sn = connection.sequence().unwrap().next_stat_sn();
+        let read = connection
+            .receive(scsi_command(cdb, true, 1024, 12, exp_stat_sn))
+            .unwrap();
+        let Some(Pdu::ScsiDataIn(data_in)) = read.response else {
+            panic!("expected Data-In");
+        };
+        assert_eq!(&data_in.data[..512], &[0x5a; 512]);
+        assert_eq!(&data_in.data[512..], &[0xa5; 512]);
     }
 
     #[test]

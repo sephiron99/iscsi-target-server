@@ -33,6 +33,15 @@ pub enum TargetLoginError {
     AlreadyFinished,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NegotiatedDataParameters {
+    pub initial_r2t: bool,
+    pub immediate_data: bool,
+    pub first_burst_length: u32,
+    pub max_burst_length: u32,
+    pub max_outstanding_r2t: u16,
+}
+
 /// Connection 계층에 돌려주는 한 번의 Login 처리 결과.
 #[derive(Debug, Clone)]
 pub struct TargetLoginOutcome {
@@ -65,6 +74,9 @@ pub struct TargetLoginProcessor {
     chap: Option<ChapExchange>,
     negotiated_max_burst_length: u32,
     negotiated_first_burst_length: u32,
+    negotiated_initial_r2t: bool,
+    negotiated_immediate_data: bool,
+    negotiated_max_outstanding_r2t: u16,
     finished: bool,
 }
 
@@ -83,6 +95,9 @@ impl TargetLoginProcessor {
             chap: None,
             negotiated_max_burst_length,
             negotiated_first_burst_length,
+            negotiated_initial_r2t: crate::login_policy::DEFAULT_INITIAL_R2T,
+            negotiated_immediate_data: crate::login_policy::DEFAULT_IMMEDIATE_DATA,
+            negotiated_max_outstanding_r2t: crate::login_policy::DEFAULT_MAX_OUTSTANDING_R2T,
             finished: false,
         }
     }
@@ -107,6 +122,16 @@ impl TargetLoginProcessor {
 
     pub fn configured_target_name(&self) -> Option<&IscsiName> {
         self.policy.target_name()
+    }
+
+    pub fn data_parameters(&self) -> NegotiatedDataParameters {
+        NegotiatedDataParameters {
+            initial_r2t: self.negotiated_initial_r2t,
+            immediate_data: self.negotiated_immediate_data,
+            first_burst_length: self.negotiated_first_burst_length,
+            max_burst_length: self.negotiated_max_burst_length,
+            max_outstanding_r2t: self.negotiated_max_outstanding_r2t,
+        }
     }
 
     pub fn handle_request(
@@ -337,12 +362,15 @@ impl TargetLoginProcessor {
                     response.push(key, &minimum(value, target)?)
                 }
                 "InitialR2T" => {
-                    response.push(key, yes_no(parse_bool(value)? || self.policy.initial_r2t()))
+                    let selected = parse_bool(value)? || self.policy.initial_r2t();
+                    self.negotiated_initial_r2t = selected;
+                    response.push(key, yes_no(selected))
                 }
-                "ImmediateData" => response.push(
-                    key,
-                    yes_no(parse_bool(value)? && self.policy.immediate_data()),
-                ),
+                "ImmediateData" => {
+                    let selected = parse_bool(value)? && self.policy.immediate_data();
+                    self.negotiated_immediate_data = selected;
+                    response.push(key, yes_no(selected))
+                }
                 "MaxBurstLength" => {
                     let selected = minimum(value, self.policy.max_burst_length())?;
                     self.negotiated_max_burst_length =
@@ -362,7 +390,10 @@ impl TargetLoginProcessor {
                     response.push(key, &minimum(value, self.policy.default_time2_retain())?)
                 }
                 "MaxOutstandingR2T" => {
-                    response.push(key, &minimum(value, self.policy.max_outstanding_r2t())?)
+                    let selected = minimum(value, self.policy.max_outstanding_r2t())?;
+                    self.negotiated_max_outstanding_r2t =
+                        selected.parse().map_err(|_| LOGIN_STATUS_INVALID_REQUEST)?;
+                    response.push(key, &selected)
                 }
                 "DataPDUInOrder" => response.push(
                     key,
@@ -871,6 +902,16 @@ mod tests {
         for (key, value) in expected {
             assert_eq!(response.params.get(key), Some(value), "{key}");
         }
+        assert_eq!(
+            processor.data_parameters(),
+            NegotiatedDataParameters {
+                initial_r2t: true,
+                immediate_data: false,
+                first_burst_length: 65_536,
+                max_burst_length: 262_144,
+                max_outstanding_r2t: 1,
+            }
+        );
     }
 
     #[test]

@@ -1,5 +1,7 @@
 //! Full Feature Phase의 제어 PDU와 discovery 상태.
 
+use std::collections::HashMap;
+
 use bytes::{Bytes, BytesMut};
 
 use crate::control::{
@@ -8,9 +10,10 @@ use crate::control::{
 };
 use crate::login::{IscsiName, SessionType, TextParameterError, TextParameters};
 use crate::opcode::TaskMgmtFunction;
-use crate::scsi::{ScsiDataIn, ScsiResponse};
-use crate::scsi_target::{ScsiTarget, STATUS_CHECK_CONDITION};
+use crate::scsi::{R2t, ScsiCommand, ScsiDataIn, ScsiDataOut, ScsiResponse};
+use crate::scsi_target::{ScsiExecution, ScsiTarget, STATUS_CHECK_CONDITION, STATUS_GOOD};
 use crate::serial::{SequenceError, SequenceState};
+use crate::target_login::NegotiatedDataParameters;
 use crate::Pdu;
 
 pub const RESERVED_TAG: u32 = u32::MAX;
@@ -80,6 +83,28 @@ struct PendingPing {
 }
 
 #[derive(Debug, Clone)]
+struct PendingWrite {
+    lun: u64,
+    initiator_task_tag: u32,
+    cdb: [u8; 16],
+    expected_length: usize,
+    data: BytesMut,
+    target_transfer_tag: u32,
+    burst_end: usize,
+    next_data_sn: u32,
+    next_r2t_sn: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CommandCompletion {
+    lun: u64,
+    initiator_task_tag: u32,
+    expected_length: u32,
+    actual_length: usize,
+    max_response_segment_length: usize,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct FullFeatureState {
     session_type: SessionType,
     logged_in_target: Option<IscsiName>,
@@ -89,6 +114,8 @@ pub(crate) struct FullFeatureState {
     pending_ping: Option<PendingPing>,
     next_target_transfer_tag: u32,
     max_text_sequence_length: usize,
+    data_parameters: NegotiatedDataParameters,
+    pending_writes: HashMap<u32, PendingWrite>,
 }
 
 impl FullFeatureState {
@@ -111,11 +138,23 @@ impl FullFeatureState {
             pending_ping: None,
             next_target_transfer_tag: 1,
             max_text_sequence_length: DEFAULT_MAX_TEXT_SEQUENCE_LENGTH,
+            data_parameters: NegotiatedDataParameters {
+                initial_r2t: true,
+                immediate_data: true,
+                first_burst_length: 64 * 1024,
+                max_burst_length: 256 * 1024,
+                max_outstanding_r2t: 1,
+            },
+            pending_writes: HashMap::new(),
         }
     }
 
     pub(crate) fn set_max_text_sequence_length(&mut self, value: usize) {
         self.max_text_sequence_length = value;
+    }
+
+    pub(crate) fn set_data_parameters(&mut self, parameters: NegotiatedDataParameters) {
+        self.data_parameters = parameters;
     }
 
     pub(crate) fn has_pending_ping(&self) -> bool {
@@ -261,81 +300,16 @@ impl FullFeatureState {
                     },
                 )))
             }
-            Pdu::ScsiCommand(request) => {
-                observe_request(
-                    sequence,
-                    request.cmd_sn,
-                    request.exp_stat_sn,
-                    request.immediate,
-                )?;
-                let Some(target) = scsi_target else {
-                    return Ok(FullFeatureDisposition::Response(reject(
-                        RejectReason::CommandNotSupported,
-                        rejected_header,
-                        sequence,
-                    )));
-                };
-                let result = target.execute(request.lun, &request.cdb, &request.immediate_data);
-                let actual_length = if request.read {
-                    result.data.len()
-                } else if request.write {
-                    request.immediate_data.len()
-                } else {
-                    0
-                };
-                let actual = u32::try_from(actual_length).unwrap_or(u32::MAX);
-                let underflow = actual < request.expected_data_transfer_length;
-                let overflow = actual > request.expected_data_transfer_length;
-                let residual_count = actual.abs_diff(request.expected_data_transfer_length);
-                if result.data.len() > max_response_segment_length {
-                    return Ok(FullFeatureDisposition::Response(reject(
-                        RejectReason::CommandNotSupported,
-                        rejected_header,
-                        sequence,
-                    )));
-                }
-                if !result.data.is_empty() && result.status != STATUS_CHECK_CONDITION {
-                    return Ok(FullFeatureDisposition::Response(Pdu::ScsiDataIn(
-                        ScsiDataIn {
-                            final_: true,
-                            acknowledge: false,
-                            status_present: true,
-                            overflow,
-                            underflow,
-                            status: result.status,
-                            lun: request.lun,
-                            initiator_task_tag: request.initiator_task_tag,
-                            target_transfer_tag: RESERVED_TAG,
-                            stat_sn: sequence.allocate_stat_sn(),
-                            exp_cmd_sn: sequence.exp_cmd_sn(),
-                            max_cmd_sn: sequence.max_cmd_sn(),
-                            data_sn: 0,
-                            buffer_offset: 0,
-                            residual_count,
-                            data: result.data,
-                        },
-                    )));
-                }
-                let mut response = ScsiResponse::good(
-                    request.initiator_task_tag,
-                    sequence.allocate_stat_sn(),
-                    sequence.exp_cmd_sn(),
-                    sequence.max_cmd_sn(),
-                );
-                response.status = result.status;
-                response.sense = result.sense;
-                response.underflow = underflow;
-                response.overflow = overflow;
-                response.residual_count = residual_count;
-                Ok(FullFeatureDisposition::Response(Pdu::ScsiResponse(
-                    response,
-                )))
-            }
-            Pdu::ScsiDataOut(_) => Ok(FullFeatureDisposition::Response(reject(
-                RejectReason::InvalidPduField,
-                rejected_header,
+            Pdu::ScsiCommand(request) => self.receive_scsi_command(
+                request,
                 sequence,
-            ))),
+                max_response_segment_length,
+                scsi_target,
+                rejected_header,
+            ),
+            Pdu::ScsiDataOut(request) => {
+                self.receive_data_out(request, sequence, scsi_target, rejected_header)
+            }
             Pdu::LoginRequest(_) => Ok(FullFeatureDisposition::CloseAfterReject(reject(
                 RejectReason::ProtocolError,
                 rejected_header,
@@ -356,6 +330,231 @@ impl FullFeatureState {
                 sequence,
             ))),
         }
+    }
+
+    fn receive_scsi_command(
+        &mut self,
+        request: ScsiCommand,
+        sequence: &mut SequenceState,
+        max_response_segment_length: usize,
+        scsi_target: Option<&mut ScsiTarget>,
+        rejected_header: Bytes,
+    ) -> Result<FullFeatureDisposition, ControlError> {
+        observe_request(
+            sequence,
+            request.cmd_sn,
+            request.exp_stat_sn,
+            request.immediate,
+        )?;
+        let Some(target) = scsi_target else {
+            return Ok(FullFeatureDisposition::Response(reject(
+                RejectReason::CommandNotSupported,
+                rejected_header,
+                sequence,
+            )));
+        };
+
+        if !request.write {
+            let result = target.execute(request.lun, &request.cdb, &request.immediate_data);
+            let actual_length = result.data.len();
+            return Ok(command_result(
+                CommandCompletion {
+                    lun: request.lun,
+                    initiator_task_tag: request.initiator_task_tag,
+                    expected_length: request.expected_data_transfer_length,
+                    actual_length,
+                    max_response_segment_length,
+                },
+                result,
+                sequence,
+                rejected_header,
+            ));
+        }
+        if request.read
+            || self
+                .pending_writes
+                .contains_key(&request.initiator_task_tag)
+            || (!self.data_parameters.immediate_data && !request.immediate_data.is_empty())
+            || (self.data_parameters.initial_r2t && !request.final_)
+        {
+            return Ok(FullFeatureDisposition::Response(reject(
+                RejectReason::InvalidPduField,
+                rejected_header,
+                sequence,
+            )));
+        }
+
+        let expected_length = request.expected_data_transfer_length as usize;
+        let immediate_length = request.immediate_data.len();
+        if expected_length > target.max_transfer_length()
+            || immediate_length > expected_length
+            || immediate_length > self.data_parameters.first_burst_length as usize
+        {
+            return Ok(FullFeatureDisposition::Response(reject(
+                RejectReason::InvalidPduField,
+                rejected_header,
+                sequence,
+            )));
+        }
+        if immediate_length == expected_length {
+            if !request.final_ {
+                return Ok(FullFeatureDisposition::Response(reject(
+                    RejectReason::InvalidPduField,
+                    rejected_header,
+                    sequence,
+                )));
+            }
+            let result = target.execute(request.lun, &request.cdb, &request.immediate_data);
+            let actual_length = if result.status == STATUS_GOOD {
+                expected_length
+            } else {
+                0
+            };
+            return Ok(command_result(
+                CommandCompletion {
+                    lun: request.lun,
+                    initiator_task_tag: request.initiator_task_tag,
+                    expected_length: request.expected_data_transfer_length,
+                    actual_length,
+                    max_response_segment_length,
+                },
+                result,
+                sequence,
+                rejected_header,
+            ));
+        }
+
+        let mut data = BytesMut::with_capacity(immediate_length);
+        data.extend_from_slice(&request.immediate_data);
+        let unsolicited_end = expected_length.min(self.data_parameters.first_burst_length as usize);
+        self.pending_writes.insert(
+            request.initiator_task_tag,
+            PendingWrite {
+                lun: request.lun,
+                initiator_task_tag: request.initiator_task_tag,
+                cdb: request.cdb,
+                expected_length,
+                data,
+                target_transfer_tag: RESERVED_TAG,
+                burst_end: unsolicited_end,
+                next_data_sn: 0,
+                next_r2t_sn: 0,
+            },
+        );
+
+        if !self.data_parameters.initial_r2t
+            && !request.final_
+            && immediate_length < unsolicited_end
+        {
+            return Ok(FullFeatureDisposition::NoResponse);
+        }
+        Ok(FullFeatureDisposition::Response(
+            self.issue_r2t(request.initiator_task_tag, sequence)?,
+        ))
+    }
+
+    fn receive_data_out(
+        &mut self,
+        request: ScsiDataOut,
+        sequence: &mut SequenceState,
+        scsi_target: Option<&mut ScsiTarget>,
+        rejected_header: Bytes,
+    ) -> Result<FullFeatureDisposition, ControlError> {
+        let Some(pending) = self.pending_writes.get(&request.initiator_task_tag) else {
+            return Ok(invalid_data_out(rejected_header, sequence));
+        };
+        let new_length = pending.data.len().checked_add(request.data.len());
+        let valid = request.lun == pending.lun
+            && request.target_transfer_tag == pending.target_transfer_tag
+            && request.buffer_offset as usize == pending.data.len()
+            && request.data_sn == pending.next_data_sn
+            && !request.data.is_empty()
+            && new_length.is_some_and(|length| {
+                length <= pending.burst_end && length <= pending.expected_length
+            });
+        if !valid {
+            return Ok(invalid_data_out(rejected_header, sequence));
+        }
+        let new_length = new_length.unwrap_or(usize::MAX);
+        if request.final_ != (new_length == pending.burst_end) {
+            return Ok(invalid_data_out(rejected_header, sequence));
+        }
+
+        let mut next_sequence = sequence.clone();
+        next_sequence.acknowledge_exp_stat_sn(request.exp_stat_sn)?;
+        *sequence = next_sequence;
+        let pending = self
+            .pending_writes
+            .get_mut(&request.initiator_task_tag)
+            .ok_or(ControlError::MissingWriteState)?;
+        pending.data.extend_from_slice(&request.data);
+        pending.next_data_sn = pending.next_data_sn.wrapping_add(1);
+
+        if new_length < pending.burst_end {
+            return Ok(FullFeatureDisposition::NoResponse);
+        }
+        if new_length < pending.expected_length {
+            return Ok(FullFeatureDisposition::Response(
+                self.issue_r2t(request.initiator_task_tag, sequence)?,
+            ));
+        }
+
+        let pending = self
+            .pending_writes
+            .remove(&request.initiator_task_tag)
+            .ok_or(ControlError::MissingWriteState)?;
+        let Some(target) = scsi_target else {
+            return Ok(invalid_data_out(rejected_header, sequence));
+        };
+        let result = target.execute(pending.lun, &pending.cdb, &pending.data);
+        let actual_length = if result.status == STATUS_GOOD {
+            pending.expected_length
+        } else {
+            0
+        };
+        Ok(command_result(
+            CommandCompletion {
+                lun: pending.lun,
+                initiator_task_tag: pending.initiator_task_tag,
+                expected_length: pending.expected_length as u32,
+                actual_length,
+                max_response_segment_length: 0,
+            },
+            result,
+            sequence,
+            rejected_header,
+        ))
+    }
+
+    fn issue_r2t(
+        &mut self,
+        initiator_task_tag: u32,
+        sequence: &SequenceState,
+    ) -> Result<Pdu, ControlError> {
+        let target_transfer_tag = self.allocate_target_transfer_tag();
+        let pending = self
+            .pending_writes
+            .get_mut(&initiator_task_tag)
+            .ok_or(ControlError::MissingWriteState)?;
+        let buffer_offset = pending.data.len();
+        let remaining = pending.expected_length - buffer_offset;
+        let desired = remaining.min(self.data_parameters.max_burst_length as usize);
+        pending.target_transfer_tag = target_transfer_tag;
+        pending.burst_end = buffer_offset + desired;
+        pending.next_data_sn = 0;
+        let r2t_sn = pending.next_r2t_sn;
+        pending.next_r2t_sn = pending.next_r2t_sn.wrapping_add(1);
+        Ok(Pdu::R2t(R2t {
+            lun: pending.lun,
+            initiator_task_tag,
+            target_transfer_tag,
+            stat_sn: sequence.next_stat_sn(),
+            exp_cmd_sn: sequence.exp_cmd_sn(),
+            max_cmd_sn: sequence.max_cmd_sn(),
+            r2t_sn,
+            buffer_offset: buffer_offset as u32,
+            desired_data_transfer_length: desired as u32,
+        }))
     }
 
     fn receive_nop_out(
@@ -748,6 +947,61 @@ impl FullFeatureState {
     }
 }
 
+fn command_result(
+    completion: CommandCompletion,
+    result: ScsiExecution,
+    sequence: &mut SequenceState,
+    rejected_header: Bytes,
+) -> FullFeatureDisposition {
+    if !result.data.is_empty() && result.data.len() > completion.max_response_segment_length {
+        return FullFeatureDisposition::Response(reject(
+            RejectReason::CommandNotSupported,
+            rejected_header,
+            sequence,
+        ));
+    }
+    let actual = u32::try_from(completion.actual_length).unwrap_or(u32::MAX);
+    let underflow = actual < completion.expected_length;
+    let overflow = actual > completion.expected_length;
+    let residual_count = actual.abs_diff(completion.expected_length);
+    if !result.data.is_empty() && result.status != STATUS_CHECK_CONDITION {
+        return FullFeatureDisposition::Response(Pdu::ScsiDataIn(ScsiDataIn {
+            final_: true,
+            acknowledge: false,
+            status_present: true,
+            overflow,
+            underflow,
+            status: result.status,
+            lun: completion.lun,
+            initiator_task_tag: completion.initiator_task_tag,
+            target_transfer_tag: RESERVED_TAG,
+            stat_sn: sequence.allocate_stat_sn(),
+            exp_cmd_sn: sequence.exp_cmd_sn(),
+            max_cmd_sn: sequence.max_cmd_sn(),
+            data_sn: 0,
+            buffer_offset: 0,
+            residual_count,
+            data: result.data,
+        }));
+    }
+    let mut response = ScsiResponse::good(
+        completion.initiator_task_tag,
+        sequence.allocate_stat_sn(),
+        sequence.exp_cmd_sn(),
+        sequence.max_cmd_sn(),
+    );
+    response.status = result.status;
+    response.sense = result.sense;
+    response.underflow = underflow;
+    response.overflow = overflow;
+    response.residual_count = residual_count;
+    FullFeatureDisposition::Response(Pdu::ScsiResponse(response))
+}
+
+fn invalid_data_out(header: Bytes, sequence: &mut SequenceState) -> FullFeatureDisposition {
+    FullFeatureDisposition::Response(reject(RejectReason::InvalidPduField, header, sequence))
+}
+
 fn append_text(buffer: &mut BytesMut, data: &[u8], max: usize) -> Result<(), ControlError> {
     let new_len =
         buffer
@@ -807,6 +1061,8 @@ pub enum ControlError {
     TextSequenceTooLarge { len: usize, max: usize },
     #[error("Text continuation state is missing")]
     MissingTextState,
+    #[error("SCSI write continuation state is missing")]
+    MissingWriteState,
     #[error(transparent)]
     Text(#[from] TextParameterError),
     #[error(transparent)]
@@ -817,6 +1073,8 @@ pub enum ControlError {
 mod tests {
     use super::*;
     use crate::control::{LogoutRequest, NopOut, TaskMgmtRequest, TextRequest};
+    use crate::opcode::TaskAttribute;
+    use crate::scsi_target::MemoryBackend;
 
     const TARGET: &str = "iqn.2024-01.com.example:target";
 
@@ -1049,6 +1307,176 @@ mod tests {
         assert!(matches!(
             target.add_target_address("host\0hidden".to_owned()),
             Err(ControlError::InvalidTargetAddress)
+        ));
+    }
+
+    #[test]
+    fn r2t_bursts_advance_tags_offsets_and_r2t_sn() {
+        let target_name = IscsiName::parse(TARGET).unwrap();
+        let mut state = FullFeatureState::new(
+            SessionType::Normal,
+            Some(target_name.clone()),
+            vec![DiscoveryTarget::new(target_name)],
+        );
+        state.set_data_parameters(NegotiatedDataParameters {
+            initial_r2t: true,
+            immediate_data: true,
+            first_burst_length: 512,
+            max_burst_length: 512,
+            max_outstanding_r2t: 1,
+        });
+        let mut target = ScsiTarget::default();
+        target.add_lun(0, MemoryBackend::new(512, 8).unwrap());
+        let mut sequence = SequenceState::new(10, 0, 4).unwrap();
+        let mut cdb = [0; 16];
+        cdb[0] = 0x2a;
+        cdb[8] = 2;
+        let command = Pdu::ScsiCommand(ScsiCommand {
+            immediate: false,
+            final_: true,
+            read: false,
+            write: true,
+            attr: TaskAttribute::Simple,
+            lun: 0,
+            initiator_task_tag: 7,
+            expected_data_transfer_length: 1024,
+            cmd_sn: 10,
+            exp_stat_sn: 0,
+            cdb,
+            immediate_data: Bytes::new(),
+        });
+        let FullFeatureDisposition::Response(Pdu::R2t(first)) = state
+            .receive_with_scsi(command, &mut sequence, 1, 8192, Some(&mut target))
+            .unwrap()
+        else {
+            panic!("expected first R2T");
+        };
+        assert_eq!(
+            (
+                first.r2t_sn,
+                first.buffer_offset,
+                first.desired_data_transfer_length
+            ),
+            (0, 0, 512)
+        );
+
+        let FullFeatureDisposition::Response(Pdu::R2t(second)) = state
+            .receive_with_scsi(
+                Pdu::ScsiDataOut(ScsiDataOut {
+                    final_: true,
+                    lun: 0,
+                    initiator_task_tag: 7,
+                    target_transfer_tag: first.target_transfer_tag,
+                    exp_stat_sn: 0,
+                    data_sn: 0,
+                    buffer_offset: 0,
+                    data: Bytes::from(vec![1; 512]),
+                }),
+                &mut sequence,
+                1,
+                8192,
+                Some(&mut target),
+            )
+            .unwrap()
+        else {
+            panic!("expected second R2T");
+        };
+        assert_ne!(second.target_transfer_tag, first.target_transfer_tag);
+        assert_eq!(
+            (
+                second.r2t_sn,
+                second.buffer_offset,
+                second.desired_data_transfer_length
+            ),
+            (1, 512, 512)
+        );
+
+        let disposition = state
+            .receive_with_scsi(
+                Pdu::ScsiDataOut(ScsiDataOut {
+                    final_: true,
+                    lun: 0,
+                    initiator_task_tag: 7,
+                    target_transfer_tag: second.target_transfer_tag,
+                    exp_stat_sn: 0,
+                    data_sn: 0,
+                    buffer_offset: 512,
+                    data: Bytes::from(vec![2; 512]),
+                }),
+                &mut sequence,
+                1,
+                8192,
+                Some(&mut target),
+            )
+            .unwrap();
+        assert!(matches!(
+            disposition,
+            FullFeatureDisposition::Response(Pdu::ScsiResponse(_))
+        ));
+    }
+
+    #[test]
+    fn initial_r2t_no_accepts_only_the_bounded_unsolicited_sequence() {
+        let target_name = IscsiName::parse(TARGET).unwrap();
+        let mut state = FullFeatureState::new(
+            SessionType::Normal,
+            Some(target_name.clone()),
+            vec![DiscoveryTarget::new(target_name)],
+        );
+        state.set_data_parameters(NegotiatedDataParameters {
+            initial_r2t: false,
+            immediate_data: true,
+            first_burst_length: 512,
+            max_burst_length: 1024,
+            max_outstanding_r2t: 1,
+        });
+        let mut target = ScsiTarget::default();
+        target.add_lun(0, MemoryBackend::new(512, 8).unwrap());
+        let mut sequence = SequenceState::new(10, 0, 4).unwrap();
+        let mut cdb = [0; 16];
+        cdb[0] = 0x2a;
+        cdb[8] = 1;
+        let command = Pdu::ScsiCommand(ScsiCommand {
+            immediate: false,
+            final_: false,
+            read: false,
+            write: true,
+            attr: TaskAttribute::Simple,
+            lun: 0,
+            initiator_task_tag: 8,
+            expected_data_transfer_length: 512,
+            cmd_sn: 10,
+            exp_stat_sn: 0,
+            cdb,
+            immediate_data: Bytes::new(),
+        });
+        assert!(matches!(
+            state
+                .receive_with_scsi(command, &mut sequence, 1, 8192, Some(&mut target))
+                .unwrap(),
+            FullFeatureDisposition::NoResponse
+        ));
+        let result = state
+            .receive_with_scsi(
+                Pdu::ScsiDataOut(ScsiDataOut {
+                    final_: true,
+                    lun: 0,
+                    initiator_task_tag: 8,
+                    target_transfer_tag: RESERVED_TAG,
+                    exp_stat_sn: 0,
+                    data_sn: 0,
+                    buffer_offset: 0,
+                    data: Bytes::from(vec![3; 512]),
+                }),
+                &mut sequence,
+                1,
+                8192,
+                Some(&mut target),
+            )
+            .unwrap();
+        assert!(matches!(
+            result,
+            FullFeatureDisposition::Response(Pdu::ScsiResponse(_))
         ));
     }
 }

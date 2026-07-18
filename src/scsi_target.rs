@@ -189,6 +189,10 @@ impl ScsiTarget {
         Ok(())
     }
 
+    pub fn max_transfer_length(&self) -> usize {
+        self.max_transfer_length
+    }
+
     pub fn execute(&mut self, lun: u64, cdb: &[u8; 16], data_out: &[u8]) -> ScsiExecution {
         if cdb[0] == 0xa0 {
             return self.report_luns(cdb);
