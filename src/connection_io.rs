@@ -34,6 +34,11 @@ where
             let response = connection.receive(frame.pdu)?;
             if let Some(pdu) = response.response {
                 codec.encode(pdu, &mut output)?;
+            }
+            for pdu in response.additional_responses {
+                codec.encode(pdu, &mut output)?;
+            }
+            if !output.is_empty() {
                 stream.write_all(&output).await?;
                 stream.flush().await?;
                 output.clear();

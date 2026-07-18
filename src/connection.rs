@@ -59,6 +59,8 @@ impl Default for ConnectionTimeouts {
 pub struct ConnectionOutput {
     /// 응답이 필요 없는 `NOP-Out` 확인이면 `None`이다.
     pub response: Option<Pdu>,
+    /// 하나의 요청에서 연속 전송해야 하는 첫 응답 이후의 PDU이다.
+    pub additional_responses: Vec<Pdu>,
     /// 응답을 완전히 전송한 뒤 [`ConnectionStateMachine::response_sent`]를
     /// 호출해야 하는지 나타낸다.
     pub transition_after_send: bool,
@@ -310,6 +312,7 @@ impl ConnectionStateMachine {
         self.pending_phase = Some(next_phase);
         Ok(ConnectionOutput {
             response: Some(Pdu::LoginResponse(outcome.response)),
+            additional_responses: Vec::new(),
             transition_after_send: true,
         })
     }
@@ -339,10 +342,24 @@ impl ConnectionStateMachine {
         match disposition {
             FullFeatureDisposition::Response(response) => Ok(ConnectionOutput {
                 response: Some(response),
+                additional_responses: Vec::new(),
                 transition_after_send: false,
             }),
+            FullFeatureDisposition::ResponseSequence(mut responses) => {
+                let response = if responses.is_empty() {
+                    None
+                } else {
+                    Some(responses.remove(0))
+                };
+                Ok(ConnectionOutput {
+                    response,
+                    additional_responses: responses,
+                    transition_after_send: false,
+                })
+            }
             FullFeatureDisposition::NoResponse => Ok(ConnectionOutput {
                 response: None,
+                additional_responses: Vec::new(),
                 transition_after_send: false,
             }),
             FullFeatureDisposition::CloseAfterResponse(response) => {
@@ -351,6 +368,7 @@ impl ConnectionStateMachine {
                 self.pending_close_reason = Some(ConnectionCloseReason::NormalLogout);
                 Ok(ConnectionOutput {
                     response: Some(response),
+                    additional_responses: Vec::new(),
                     transition_after_send: true,
                 })
             }
@@ -360,6 +378,7 @@ impl ConnectionStateMachine {
                 self.pending_close_reason = Some(ConnectionCloseReason::ProtocolError);
                 Ok(ConnectionOutput {
                     response: Some(response),
+                    additional_responses: Vec::new(),
                     transition_after_send: true,
                 })
             }

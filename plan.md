@@ -124,7 +124,7 @@
 - [x] InitialR2T와 unsolicited Data-Out 정책
 - [x] R2T 발행, `TTT`, `R2TSN`과 burst 추적
 - [x] Data-Out의 `DataSN`, `BufferOffset`, final bit와 중복/누락 검증
-- [ ] Data-In segment 분할, `DataSN`, status 동봉과 residual 처리
+- [x] Data-In segment 분할, `DataSN`, status 동봉과 residual 처리
 - [x] `FirstBurstLength`, `MaxBurstLength`, `MaxOutstandingR2T` 적용
 - [ ] `DataPDUInOrder`, `DataSequenceInOrder` 지원 범위 결정
 - [ ] backpressure와 connection별 buffered byte 상한

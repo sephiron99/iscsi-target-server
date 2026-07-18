@@ -53,6 +53,7 @@ impl DiscoveryTarget {
 #[derive(Debug)]
 pub(crate) enum FullFeatureDisposition {
     Response(Pdu),
+    ResponseSequence(Vec<Pdu>),
     NoResponse,
     CloseAfterResponse(Pdu),
     CloseAfterReject(Pdu),
@@ -367,7 +368,6 @@ impl FullFeatureState {
                 },
                 result,
                 sequence,
-                rejected_header,
             ));
         }
         if request.read
@@ -420,7 +420,6 @@ impl FullFeatureState {
                 },
                 result,
                 sequence,
-                rejected_header,
             ));
         }
 
@@ -522,7 +521,6 @@ impl FullFeatureState {
             },
             result,
             sequence,
-            rejected_header,
         ))
     }
 
@@ -951,38 +949,48 @@ fn command_result(
     completion: CommandCompletion,
     result: ScsiExecution,
     sequence: &mut SequenceState,
-    rejected_header: Bytes,
 ) -> FullFeatureDisposition {
-    if !result.data.is_empty() && result.data.len() > completion.max_response_segment_length {
-        return FullFeatureDisposition::Response(reject(
-            RejectReason::CommandNotSupported,
-            rejected_header,
-            sequence,
-        ));
-    }
     let actual = u32::try_from(completion.actual_length).unwrap_or(u32::MAX);
     let underflow = actual < completion.expected_length;
     let overflow = actual > completion.expected_length;
     let residual_count = actual.abs_diff(completion.expected_length);
-    if !result.data.is_empty() && result.status != STATUS_CHECK_CONDITION {
-        return FullFeatureDisposition::Response(Pdu::ScsiDataIn(ScsiDataIn {
-            final_: true,
-            acknowledge: false,
-            status_present: true,
-            overflow,
-            underflow,
-            status: result.status,
-            lun: completion.lun,
-            initiator_task_tag: completion.initiator_task_tag,
-            target_transfer_tag: RESERVED_TAG,
-            stat_sn: sequence.allocate_stat_sn(),
-            exp_cmd_sn: sequence.exp_cmd_sn(),
-            max_cmd_sn: sequence.max_cmd_sn(),
-            data_sn: 0,
-            buffer_offset: 0,
-            residual_count,
-            data: result.data,
-        }));
+    let transfer_length = result.data.len().min(completion.expected_length as usize);
+    if transfer_length != 0 && result.status != STATUS_CHECK_CONDITION {
+        let segment_length = completion.max_response_segment_length.max(1);
+        let segment_count = transfer_length.div_ceil(segment_length);
+        let mut responses = Vec::with_capacity(segment_count);
+        for (index, offset) in (0..transfer_length).step_by(segment_length).enumerate() {
+            let end = transfer_length.min(offset + segment_length);
+            let final_ = end == transfer_length;
+            // RFC 7143 §11.7: status가 없는 Data-In의 StatSN은 reserved이다.
+            let stat_sn = if final_ {
+                sequence.allocate_stat_sn()
+            } else {
+                0
+            };
+            responses.push(Pdu::ScsiDataIn(ScsiDataIn {
+                final_,
+                acknowledge: false,
+                status_present: final_,
+                overflow: final_ && overflow,
+                underflow: final_ && underflow,
+                status: if final_ { result.status } else { 0 },
+                lun: completion.lun,
+                initiator_task_tag: completion.initiator_task_tag,
+                target_transfer_tag: RESERVED_TAG,
+                stat_sn,
+                exp_cmd_sn: sequence.exp_cmd_sn(),
+                max_cmd_sn: sequence.max_cmd_sn(),
+                data_sn: index as u32,
+                buffer_offset: offset as u32,
+                residual_count: if final_ { residual_count } else { 0 },
+                data: result.data.slice(offset..end),
+            }));
+        }
+        return match responses.as_slice() {
+            [response] => FullFeatureDisposition::Response(response.clone()),
+            _ => FullFeatureDisposition::ResponseSequence(responses),
+        };
     }
     let mut response = ScsiResponse::good(
         completion.initiator_task_tag,
@@ -1478,5 +1486,119 @@ mod tests {
             result,
             FullFeatureDisposition::Response(Pdu::ScsiResponse(_))
         ));
+    }
+
+    #[test]
+    fn read_data_is_segmented_with_monotonic_data_sn_and_final_status() {
+        let target_name = IscsiName::parse(TARGET).unwrap();
+        let mut state = FullFeatureState::new(
+            SessionType::Normal,
+            Some(target_name.clone()),
+            vec![DiscoveryTarget::new(target_name)],
+        );
+        let mut target = ScsiTarget::default();
+        target.add_lun(0, MemoryBackend::new(512, 8).unwrap());
+        let mut sequence = SequenceState::new(10, 7, 4).unwrap();
+        let mut cdb = [0; 16];
+        cdb[0] = 0x28;
+        cdb[8] = 2;
+
+        let disposition = state
+            .receive_with_scsi(
+                Pdu::ScsiCommand(ScsiCommand {
+                    immediate: false,
+                    final_: true,
+                    read: true,
+                    write: false,
+                    attr: TaskAttribute::Simple,
+                    lun: 0,
+                    initiator_task_tag: 0x1122_3344,
+                    expected_data_transfer_length: 1024,
+                    cmd_sn: 10,
+                    exp_stat_sn: 7,
+                    cdb,
+                    immediate_data: Bytes::new(),
+                }),
+                &mut sequence,
+                1,
+                300,
+                Some(&mut target),
+            )
+            .unwrap();
+        let FullFeatureDisposition::ResponseSequence(responses) = disposition else {
+            panic!("expected segmented Data-In responses");
+        };
+        assert_eq!(responses.len(), 4);
+
+        let expected = [
+            (0, 0, 300, false),
+            (1, 300, 300, false),
+            (2, 600, 300, false),
+            (3, 900, 124, true),
+        ];
+        for (response, (data_sn, offset, len, final_)) in responses.iter().zip(expected) {
+            let Pdu::ScsiDataIn(data_in) = response else {
+                panic!("expected Data-In");
+            };
+            assert_eq!(
+                (
+                    data_in.data_sn,
+                    data_in.buffer_offset,
+                    data_in.data.len(),
+                    data_in.final_,
+                    data_in.status_present,
+                ),
+                (data_sn, offset, len, final_, final_)
+            );
+            assert_eq!(data_in.stat_sn, if final_ { 7 } else { 0 });
+            assert_eq!(data_in.residual_count, 0);
+        }
+        assert_eq!(sequence.next_stat_sn(), 8);
+    }
+
+    #[test]
+    fn data_in_never_exceeds_expected_length_and_reports_overflow() {
+        let target_name = IscsiName::parse(TARGET).unwrap();
+        let mut state = FullFeatureState::new(
+            SessionType::Normal,
+            Some(target_name.clone()),
+            vec![DiscoveryTarget::new(target_name)],
+        );
+        let mut target = ScsiTarget::default();
+        target.add_lun(0, MemoryBackend::new(512, 8).unwrap());
+        let mut sequence = SequenceState::new(10, 0, 4).unwrap();
+        let mut cdb = [0; 16];
+        cdb[0] = 0x12;
+        cdb[4] = 36;
+
+        let disposition = state
+            .receive_with_scsi(
+                Pdu::ScsiCommand(ScsiCommand {
+                    immediate: false,
+                    final_: true,
+                    read: true,
+                    write: false,
+                    attr: TaskAttribute::Simple,
+                    lun: 0,
+                    initiator_task_tag: 9,
+                    expected_data_transfer_length: 20,
+                    cmd_sn: 10,
+                    exp_stat_sn: 0,
+                    cdb,
+                    immediate_data: Bytes::new(),
+                }),
+                &mut sequence,
+                1,
+                512,
+                Some(&mut target),
+            )
+            .unwrap();
+        let FullFeatureDisposition::Response(Pdu::ScsiDataIn(response)) = disposition else {
+            panic!("expected final Data-In");
+        };
+        assert_eq!(response.data.len(), 20);
+        assert!(response.final_ && response.status_present && response.overflow);
+        assert!(!response.underflow);
+        assert_eq!(response.residual_count, 16);
     }
 }
