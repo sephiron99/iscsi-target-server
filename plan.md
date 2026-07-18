@@ -148,6 +148,8 @@
 - [x] backend 오류를 SCSI sense로 변환하는 규칙
 - [x] backend I/O 오류의 작업 종류, `ErrorKind`와 OS error code 보존
 - [-] Windows CI workflow에 physical disk/volume backend compile 및 단위 테스트 추가, 첫 runner 검증 대기
+- [-] removable/USB physical disk 지원: sector size 조회의 `IOCTL_DISK_GET_DRIVE_GEOMETRY` fallback과 disk 전체 read-write serve 시 mounted volume 일괄 lock/dismount, 실기기 검증 대기
+- [ ] physical disk 열거 API (device number, description, serial number, bus type, removable 여부) — GUI/CLI 디스크 선택용
 
 완료 조건:
 
@@ -225,6 +227,7 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 - [ ] 로그의 secret/raw payload 노출 감사
 - [ ] I/O 오류, full disk, read-only와 backend 제거 시나리오
 - [ ] 실제 Windows 10/11에서 physical disk/volume 조회, lock, read/write/flush 검증
+- [ ] USB 메모리 디스크 시나리오: read-only/read-write 전체 disk serve(자동 mount 상태에서 시작), volume 단위 serve, serve 중 장치 제거 시 CHECK CONDITION과 connection 유지 검증
 - [ ] 지원 범위와 알려진 제한 문서화
 
 완료 조건:

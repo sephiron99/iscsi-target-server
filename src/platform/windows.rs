@@ -3,20 +3,26 @@
 //! Win32 handle과 `DeviceIoControl` 사용은 이 모듈 안에만 격리한다. 상위 계층은
 //! [`StorageBackend`]만 사용하며 장치 경로나 Win32 타입을 알 필요가 없다.
 
-use std::ffi::c_void;
+use std::ffi::{c_void, OsString};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::mem::size_of;
+use std::mem::{offset_of, size_of};
+use std::os::windows::ffi::OsStringExt;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
 
-use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+use windows_sys::Win32::Foundation::{ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Storage::FileSystem::{
+    FindFirstVolumeW, FindNextVolumeW, FindVolumeClose, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+};
 use windows_sys::Win32::System::Ioctl::{
-    PropertyStandardQuery, StorageAccessAlignmentProperty, FSCTL_DISMOUNT_VOLUME,
-    FSCTL_LOCK_VOLUME, GET_LENGTH_INFORMATION, IOCTL_DISK_GET_LENGTH_INFO,
-    IOCTL_STORAGE_QUERY_PROPERTY, STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR, STORAGE_PROPERTY_QUERY,
+    PropertyStandardQuery, StorageAccessAlignmentProperty, DISK_EXTENT, DISK_GEOMETRY,
+    FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, GET_LENGTH_INFORMATION,
+    IOCTL_DISK_GET_DRIVE_GEOMETRY, IOCTL_DISK_GET_LENGTH_INFO, IOCTL_STORAGE_QUERY_PROPERTY,
+    STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR, STORAGE_PROPERTY_QUERY, VOLUME_DISK_EXTENTS,
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
@@ -39,11 +45,20 @@ impl WindowsStorageAccess {
     }
 }
 
+/// 열려는 raw device 종류. `ReadWrite`에서 volume 잠금 범위를 결정한다.
+enum WindowsDeviceKind {
+    Volume,
+    PhysicalDrive { device_number: u32 },
+}
+
 /// Windows physical disk 또는 volume handle을 감싼 block backend.
 ///
-/// `ReadWrite` physical disk는 Windows에서 장치가 offline/unmounted인 경우에만 사용해야
-/// 한다. volume은 `ReadWrite`로 열 때 handle 수명 동안 `FSCTL_LOCK_VOLUME`을 획득하고
-/// dismount한다. 두 경우 모두 보통 관리자 권한이 필요하다.
+/// `ReadWrite` volume은 handle 수명 동안 `FSCTL_LOCK_VOLUME`을 획득하고 dismount한다.
+/// `ReadWrite` physical disk는 그 위의 mounted volume을 전부 lock/dismount한 뒤 잠금
+/// handle을 backend 수명 동안 유지한다 — Windows가 mounted volume extent에 대한 physical
+/// disk 직접 write를 차단하기 때문이다 (자동 mount되는 USB 이동식 디스크 포함). backend를
+/// drop하면 잠금이 해제되어 volume이 다시 mount될 수 있다. 두 경우 모두 보통 관리자
+/// 권한이 필요하다.
 #[derive(Debug)]
 pub struct WindowsStorageBackend {
     file: File,
@@ -51,6 +66,9 @@ pub struct WindowsStorageBackend {
     block_count: u64,
     read_only: bool,
     durable_flush: bool,
+    /// physical disk를 `ReadWrite`로 여는 동안 잠근 volume handle들.
+    /// 잠금은 handle이 닫힐 때 해제되므로 backend 수명 동안 보관만 한다.
+    _volume_locks: Vec<File>,
 }
 
 impl WindowsStorageBackend {
@@ -60,7 +78,11 @@ impl WindowsStorageBackend {
         access: WindowsStorageAccess,
     ) -> Result<Self, StorageError> {
         let path = PathBuf::from(format!(r"\\.\PhysicalDrive{device_number}"));
-        Self::open(path, access, false)
+        Self::open(
+            path,
+            access,
+            WindowsDeviceKind::PhysicalDrive { device_number },
+        )
     }
 
     /// drive letter에 대응하는 `\\.\X:` volume을 연다.
@@ -73,7 +95,7 @@ impl WindowsStorageBackend {
         }
         let drive_letter = drive_letter.to_ascii_uppercase();
         let path = PathBuf::from(format!(r"\\.\{drive_letter}:"));
-        Self::open(path, access, true)
+        Self::open(path, access, WindowsDeviceKind::Volume)
     }
 
     pub fn set_durable_flush(&mut self, value: bool) {
@@ -87,7 +109,7 @@ impl WindowsStorageBackend {
     fn open(
         path: PathBuf,
         access: WindowsStorageAccess,
-        is_volume: bool,
+        kind: WindowsDeviceKind,
     ) -> Result<Self, StorageError> {
         let read_only = access.read_only();
         let share_mode = if read_only {
@@ -102,10 +124,20 @@ impl WindowsStorageBackend {
             .open(path)
             .map_err(|error| storage_io_error(StorageIoOperation::Open, error))?;
 
-        if is_volume && !read_only {
-            device_io_control_no_buffers(&file, FSCTL_LOCK_VOLUME)?;
-            device_io_control_no_buffers(&file, FSCTL_DISMOUNT_VOLUME)?;
-        }
+        let volume_locks = if read_only {
+            Vec::new()
+        } else {
+            match kind {
+                WindowsDeviceKind::Volume => {
+                    device_io_control_no_buffers(&file, FSCTL_LOCK_VOLUME)?;
+                    device_io_control_no_buffers(&file, FSCTL_DISMOUNT_VOLUME)?;
+                    Vec::new()
+                }
+                WindowsDeviceKind::PhysicalDrive { device_number } => {
+                    lock_mounted_volumes_on_disk(device_number)?
+                }
+            }
+        };
 
         let length = query_device_length(&file)?;
         let block_size = query_logical_sector_size(&file)?;
@@ -122,6 +154,7 @@ impl WindowsStorageBackend {
             block_count: length / u64::from(block_size),
             read_only,
             durable_flush: true,
+            _volume_locks: volume_locks,
         })
     }
 }
@@ -180,18 +213,213 @@ fn query_device_length(file: &File) -> Result<u64, StorageError> {
     u64::try_from(info.Length).map_err(|_| StorageError::OutOfRange)
 }
 
+/// logical sector 크기를 조회한다.
+///
+/// `StorageAccessAlignmentProperty`는 USB mass-storage bridge 다수가 구현하지 않아
+/// `ERROR_INVALID_FUNCTION` 등으로 실패하므로, 그 경우 모든 disk 장치가 지원하는
+/// `IOCTL_DISK_GET_DRIVE_GEOMETRY`의 `BytesPerSector`로 fallback한다.
 fn query_logical_sector_size(file: &File) -> Result<u32, StorageError> {
+    if let Ok(descriptor) = query_access_alignment(file) {
+        if descriptor.BytesPerLogicalSector != 0 {
+            return Ok(descriptor.BytesPerLogicalSector);
+        }
+    }
+    let geometry: DISK_GEOMETRY = device_io_control_output(file, IOCTL_DISK_GET_DRIVE_GEOMETRY)?;
+    if geometry.BytesPerSector == 0 {
+        return Err(StorageError::OutOfRange);
+    }
+    Ok(geometry.BytesPerSector)
+}
+
+fn query_access_alignment(
+    file: &File,
+) -> Result<STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR, StorageError> {
     let query = STORAGE_PROPERTY_QUERY {
         PropertyId: StorageAccessAlignmentProperty,
         QueryType: PropertyStandardQuery,
         AdditionalParameters: [0],
     };
-    let descriptor: STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR =
-        device_io_control(file, IOCTL_STORAGE_QUERY_PROPERTY, &query)?;
-    if descriptor.BytesPerLogicalSector == 0 {
-        return Err(StorageError::OutOfRange);
+    device_io_control(file, IOCTL_STORAGE_QUERY_PROPERTY, &query)
+}
+
+/// 대상 physical disk 위의 mounted volume을 모두 lock/dismount하고 handle을 반환한다.
+///
+/// Windows는 mounted volume extent에 대한 physical disk 직접 write를 차단하므로
+/// read-write serve 전에 이 잠금이 필요하다. 대상 disk 소속으로 판정된 volume을
+/// 잠글 수 없으면 전체를 실패로 처리한다. 열 수 없어 소속을 판정할 수 없는 volume은
+/// 건너뛴다 (예: 접근이 제한된 시스템 volume — 대상 disk 소속이면 이후 write가
+/// 거부되어 오류로 드러난다).
+fn lock_mounted_volumes_on_disk(device_number: u32) -> Result<Vec<File>, StorageError> {
+    let share_mode = FILE_SHARE_READ | FILE_SHARE_WRITE;
+    let mut locks = Vec::new();
+    for path in mounted_volume_device_paths()? {
+        let volume = match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(share_mode)
+            .open(&path)
+        {
+            Ok(volume) => volume,
+            Err(error) => {
+                // write 접근이 거부된 volume이라도 대상 disk 소속이면 잠글 수
+                // 없으므로 실패해야 한다. read 접근으로 소속만 판정한다.
+                let Ok(probe) = OpenOptions::new()
+                    .read(true)
+                    .share_mode(share_mode)
+                    .open(&path)
+                else {
+                    continue;
+                };
+                if volume_spans_disk(&probe, device_number) {
+                    return Err(storage_io_error(StorageIoOperation::Open, error));
+                }
+                continue;
+            }
+        };
+        if !volume_spans_disk(&volume, device_number) {
+            continue;
+        }
+        device_io_control_no_buffers(&volume, FSCTL_LOCK_VOLUME)?;
+        device_io_control_no_buffers(&volume, FSCTL_DISMOUNT_VOLUME)?;
+        locks.push(volume);
     }
-    Ok(descriptor.BytesPerLogicalSector)
+    Ok(locks)
+}
+
+/// extents를 조회할 수 없는 volume(예: disk 기반이 아닌 장치)은 소속이 아닌 것으로 본다.
+fn volume_spans_disk(volume: &File, device_number: u32) -> bool {
+    query_volume_disk_numbers(volume)
+        .map(|numbers| numbers.contains(&device_number))
+        .unwrap_or(false)
+}
+
+/// 시스템의 mounted volume 장치 경로(`\\?\Volume{...}`) 목록을 반환한다.
+fn mounted_volume_device_paths() -> Result<Vec<PathBuf>, StorageError> {
+    struct FindVolumeGuard(HANDLE);
+    impl Drop for FindVolumeGuard {
+        fn drop(&mut self) {
+            // SAFETY: handle은 FindFirstVolumeW가 반환한 유효한 열거 handle이다.
+            unsafe { FindVolumeClose(self.0) };
+        }
+    }
+
+    let mut name = [0u16; 260];
+    // SAFETY: name은 선언한 길이만큼 유효한 wide 문자 buffer다.
+    let handle = unsafe { FindFirstVolumeW(name.as_mut_ptr(), name.len() as u32) };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(storage_io_error(
+            StorageIoOperation::Open,
+            std::io::Error::last_os_error(),
+        ));
+    }
+    let guard = FindVolumeGuard(handle);
+    let mut paths = Vec::new();
+    loop {
+        if let Some(path) = volume_device_path(&name) {
+            paths.push(path);
+        }
+        // SAFETY: handle은 guard가 소유한 유효한 열거 handle이고 name은 유효한 buffer다.
+        let more = unsafe { FindNextVolumeW(guard.0, name.as_mut_ptr(), name.len() as u32) };
+        if more == 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_NO_MORE_FILES as i32) {
+                break;
+            }
+            return Err(storage_io_error(StorageIoOperation::Open, error));
+        }
+    }
+    Ok(paths)
+}
+
+/// `FindFirstVolumeW`가 돌려주는 `\\?\Volume{...}\` 이름을 CreateFile로 열 수 있는
+/// 장치 경로로 바꾼다. 끝의 `\`를 제거하지 않으면 volume 장치가 아니라 filesystem
+/// root directory가 열린다.
+fn volume_device_path(name: &[u16]) -> Option<PathBuf> {
+    let length = name.iter().position(|&unit| unit == 0)?;
+    let mut name = &name[..length];
+    if let [rest @ .., last] = name {
+        if *last == u16::from(b'\\') {
+            name = rest;
+        }
+    }
+    if name.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(OsString::from_wide(name)))
+}
+
+/// 하나의 volume이 걸쳐 있는 physical disk 번호 목록.
+const MAX_VOLUME_DISK_EXTENTS: usize = 16;
+
+#[repr(C)]
+struct VolumeDiskExtentsBuffer {
+    info: VOLUME_DISK_EXTENTS,
+    /// `info.Extents[0]` 뒤에 이어지는 추가 extent 저장 공간.
+    extra: [DISK_EXTENT; MAX_VOLUME_DISK_EXTENTS - 1],
+}
+
+fn query_volume_disk_numbers(volume: &File) -> Result<Vec<u32>, StorageError> {
+    let mut buffer = VolumeDiskExtentsBuffer {
+        info: VOLUME_DISK_EXTENTS::default(),
+        extra: [DISK_EXTENT::default(); MAX_VOLUME_DISK_EXTENTS - 1],
+    };
+    let buffer_size = u32::try_from(size_of::<VolumeDiskExtentsBuffer>())
+        .map_err(|_| StorageError::OutOfRange)?;
+    let mut returned = 0;
+    // SAFETY: output buffer는 선언한 크기만큼 유효하고 호출이 끝날 때까지 살아 있다.
+    // handle은 열린 `File` 소유이고 동기 호출이므로 OVERLAPPED는 null이다.
+    let succeeded = unsafe {
+        DeviceIoControl(
+            volume.as_raw_handle(),
+            IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+            null(),
+            0,
+            &mut buffer as *mut VolumeDiskExtentsBuffer as *mut c_void,
+            buffer_size,
+            &mut returned,
+            null_mut(),
+        )
+    };
+    if succeeded == 0 {
+        return Err(storage_io_error(
+            StorageIoOperation::DeviceControl,
+            std::io::Error::last_os_error(),
+        ));
+    }
+    disk_numbers_from_extents(&buffer.info, &buffer.extra, returned as usize)
+}
+
+fn disk_numbers_from_extents(
+    info: &VOLUME_DISK_EXTENTS,
+    extra: &[DISK_EXTENT],
+    returned: usize,
+) -> Result<Vec<u32>, StorageError> {
+    let count = info.NumberOfDiskExtents as usize;
+    if count == 0 || count > extra.len() + 1 {
+        return Err(storage_io_error(
+            StorageIoOperation::DeviceControl,
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "unexpected volume disk extent count",
+            ),
+        ));
+    }
+    let required = offset_of!(VOLUME_DISK_EXTENTS, Extents) + count * size_of::<DISK_EXTENT>();
+    if returned < required {
+        return Err(storage_io_error(
+            StorageIoOperation::DeviceControl,
+            std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "truncated volume disk extents",
+            ),
+        ));
+    }
+    let mut numbers = Vec::with_capacity(count);
+    numbers.push(info.Extents[0].DiskNumber);
+    for extent in &extra[..count - 1] {
+        numbers.push(extent.DiskNumber);
+    }
+    Ok(numbers)
 }
 
 fn device_io_control_no_buffers(file: &File, code: u32) -> Result<(), StorageError> {
@@ -277,5 +505,60 @@ mod tests {
             WindowsStorageBackend::open_volume('1', WindowsStorageAccess::ReadOnly).unwrap_err(),
             StorageError::OutOfRange
         );
+    }
+
+    #[test]
+    fn volume_name_is_converted_to_openable_device_path() {
+        let wide: Vec<u16> = r"\\?\Volume{a0b1}\"
+            .encode_utf16()
+            .chain([0, 0x7777])
+            .collect();
+        assert_eq!(
+            volume_device_path(&wide),
+            Some(PathBuf::from(r"\\?\Volume{a0b1}"))
+        );
+    }
+
+    #[test]
+    fn volume_name_without_terminator_or_content_is_rejected() {
+        let unterminated: Vec<u16> = r"\\?\Volume{a0b1}\".encode_utf16().collect();
+        assert_eq!(volume_device_path(&unterminated), None);
+        assert_eq!(volume_device_path(&[u16::from(b'\\'), 0]), None);
+        assert_eq!(volume_device_path(&[0]), None);
+    }
+
+    fn extents_with_count(count: u32) -> VOLUME_DISK_EXTENTS {
+        VOLUME_DISK_EXTENTS {
+            NumberOfDiskExtents: count,
+            ..VOLUME_DISK_EXTENTS::default()
+        }
+    }
+
+    #[test]
+    fn extent_disk_numbers_are_read_from_contiguous_extents() {
+        let info = VOLUME_DISK_EXTENTS {
+            NumberOfDiskExtents: 2,
+            Extents: [DISK_EXTENT {
+                DiskNumber: 3,
+                ..DISK_EXTENT::default()
+            }],
+        };
+        let mut extra = [DISK_EXTENT::default(); MAX_VOLUME_DISK_EXTENTS - 1];
+        extra[0].DiskNumber = 7;
+        let returned = offset_of!(VOLUME_DISK_EXTENTS, Extents) + 2 * size_of::<DISK_EXTENT>();
+        assert_eq!(
+            disk_numbers_from_extents(&info, &extra, returned).unwrap(),
+            vec![3, 7]
+        );
+    }
+
+    #[test]
+    fn truncated_or_invalid_extent_counts_are_rejected() {
+        let extra = [DISK_EXTENT::default(); MAX_VOLUME_DISK_EXTENTS - 1];
+        assert!(disk_numbers_from_extents(&extents_with_count(0), &extra, 4096).is_err());
+        assert!(disk_numbers_from_extents(&extents_with_count(1), &extra, 8).is_err());
+
+        let overflowing = u32::try_from(MAX_VOLUME_DISK_EXTENTS).unwrap() + 1;
+        assert!(disk_numbers_from_extents(&extents_with_count(overflowing), &extra, 4096).is_err());
     }
 }
