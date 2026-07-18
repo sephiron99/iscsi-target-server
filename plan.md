@@ -153,7 +153,7 @@
 
 ## 8. Target daemon, 설정과 CLI
 
-- [ ] TCP listener와 connection task 수명주기
+- [x] TCP listener와 connection task 수명주기
 - [ ] bind 주소, port, Target IQN, LUN과 인증 설정 모델
 - [ ] 설정 파일 load/validate/save와 안전한 secret 처리
 - [ ] Target/LUN 추가, 제거와 상태 조회를 위한 service API

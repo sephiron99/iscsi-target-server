@@ -36,6 +36,8 @@ pub mod target_login;
 pub mod codec;
 #[cfg(feature = "codec")]
 pub mod connection_io;
+#[cfg(feature = "codec")]
+pub mod target_service;
 
 pub use auth::{ChapCredentials, ChapError, ChapExchange};
 pub use bhs::{Bhs, BHS_LEN};
@@ -71,6 +73,10 @@ pub use session::{
 };
 pub use target_login::{
     NegotiatedDataParameters, TargetLoginError, TargetLoginOutcome, TargetLoginProcessor,
+};
+#[cfg(feature = "codec")]
+pub use target_service::{
+    TargetService, TargetServiceConfig, TargetServiceError, TargetServiceSummary,
 };
 
 use bytes::{BufMut, Bytes, BytesMut};

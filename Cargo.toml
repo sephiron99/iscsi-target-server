@@ -15,7 +15,7 @@ thiserror = "2"
 zeroize = "1.8"
 # codec feature에서만 사용
 tokio-util = { version = "0.7", features = ["codec"], optional = true }
-tokio = { version = "1", features = ["io-util", "net", "time"], optional = true }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

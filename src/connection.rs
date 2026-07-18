@@ -73,7 +73,7 @@ pub struct ConnectionStateMachine {
     frame_config: FrameConfig,
     sequence: Option<SequenceState>,
     command_window: u32,
-    cid: u16,
+    cid: Option<u16>,
     pending_phase: Option<ConnectionPhase>,
     pending_frame_parameters: Option<NegotiatedFrameParameters>,
     pending_close_reason: Option<ConnectionCloseReason>,
@@ -89,6 +89,22 @@ impl ConnectionStateMachine {
     pub fn new(
         login: TargetLoginProcessor,
         cid: u16,
+        command_window: u32,
+    ) -> Result<Self, ConnectionError> {
+        Self::with_cid(login, Some(cid), command_window)
+    }
+
+    /// 첫 Login Request에서 Initiator가 선택한 CID를 바인딩한다.
+    pub fn new_unbound(
+        login: TargetLoginProcessor,
+        command_window: u32,
+    ) -> Result<Self, ConnectionError> {
+        Self::with_cid(login, None, command_window)
+    }
+
+    fn with_cid(
+        login: TargetLoginProcessor,
+        cid: Option<u16>,
         command_window: u32,
     ) -> Result<Self, ConnectionError> {
         // SequenceState가 사용하는 것과 같은 창 제약을 생성 시점에 검증한다.
@@ -114,6 +130,10 @@ impl ConnectionStateMachine {
 
     pub fn phase(&self) -> ConnectionPhase {
         self.phase
+    }
+
+    pub fn cid(&self) -> Option<u16> {
+        self.cid
     }
 
     pub fn frame_config(&self) -> &FrameConfig {
@@ -266,11 +286,15 @@ impl ConnectionStateMachine {
                 phase: self.phase,
             });
         };
-        if request.cid != self.cid {
-            return Err(ConnectionError::CidMismatch {
-                expected: self.cid,
-                actual: request.cid,
-            });
+        if let Some(cid) = self.cid {
+            if request.cid != cid {
+                return Err(ConnectionError::CidMismatch {
+                    expected: cid,
+                    actual: request.cid,
+                });
+            }
+        } else {
+            self.cid = Some(request.cid);
         }
         let outcome = self.login.handle_request(&request)?;
         let rejected = outcome.response.status_class != 0;
@@ -318,6 +342,7 @@ impl ConnectionStateMachine {
     }
 
     fn receive_full_feature(&mut self, pdu: Pdu) -> Result<ConnectionOutput, ConnectionError> {
+        let cid = self.cid.ok_or(ConnectionError::MissingConnectionId)?;
         let sequence = self
             .sequence
             .as_mut()
@@ -329,7 +354,7 @@ impl ConnectionStateMachine {
             .receive_with_scsi(
                 pdu,
                 sequence,
-                self.cid,
+                cid,
                 self.frame_config.max_send_data_segment_length(),
                 self.scsi_target.as_mut(),
             )
@@ -408,6 +433,8 @@ pub enum ConnectionError {
     InvalidLogoutReason(u8),
     #[error("Full Feature Phase has no sequence state")]
     MissingSequenceState,
+    #[error("Connection has not bound an Initiator CID")]
+    MissingConnectionId,
     #[error("Full Feature Phase has no control state")]
     MissingFullFeatureState,
     #[error("Text sequence limit {0} is outside the supported range")]
