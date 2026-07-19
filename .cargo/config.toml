@@ -1,0 +1,21 @@
+# WSL에서 Windows 32bit binary를 cross-build하기 위한 설정.
+#
+# linker 스크립트: https://github.com/strickczq/msvc-wsl-rust
+# 스크립트 쪽 MSVC 경로/버전은 ../msvc-linker/config.sh에서 맞춘다.
+#
+# 사용법:
+#   cargo build-win32        # 32bit Windows daemon binary (release)
+#   cargo build --target i686-pc-windows-msvc --features daemon
+
+[alias]
+build-win32 = "build --release --features daemon --target i686-pc-windows-msvc"
+
+# 기본 target을 i686-pc-windows-msvc로 고정하면 WSL host의 cargo test와 Linux CI가
+# Windows binary를 빌드/실행하려다 실패하므로 기본값은 비워 둔다.
+# 항상 32bit Windows로만 빌드하려면 아래 주석을 해제한다.
+# [build]
+# target = "i686-pc-windows-msvc"
+
+[target.i686-pc-windows-msvc]
+# cargo는 상대 경로 linker를 호출 위치 기준으로 해석하므로 절대 경로를 사용한다.
+linker = "/mnt/wsl/home/seph/prj/msvc-linker/linker-x86.sh"
