@@ -160,12 +160,13 @@
 
 - [x] TCP listener와 connection task 수명주기
 - [x] bind 주소, port, Target IQN, LUN과 인증 설정 모델
-- [ ] 설정 파일 load/validate/save와 안전한 secret 처리
+- [x] 설정 파일 load/validate/save와 안전한 secret 처리
 - [x] Target/LUN 추가, 제거와 상태 조회를 위한 service API
-- [ ] start, stop, 진행 중 blocking storage drain을 포함한 graceful shutdown과 active session 정리
-- [ ] 구조화된 logging과 민감 정보 필터링
-- [ ] headless 실행용 CLI
-- [ ] daemon과 CLI 통합 테스트
+- [x] start, stop, 진행 중 blocking storage drain을 포함한 graceful shutdown과 active session 정리
+- [x] 구조화된 logging과 민감 정보 필터링
+- [x] headless 실행용 CLI
+- [x] daemon과 CLI 통합 테스트
+- [ ] Login 시점 `TargetName`으로 Target을 선택하는 다중 Target Connection — daemon은 현재 단일 Target 설정만 허용
 
 완료 조건:
 

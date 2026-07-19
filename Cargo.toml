@@ -16,6 +16,20 @@ zeroize = "1.8"
 # codec feature에서만 사용
 tokio-util = { version = "0.7", features = ["codec"], optional = true }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"], optional = true }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.3"
+# tracing/daemon feature에서만 사용
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "ansi",
+    "fmt",
+    "std",
+], optional = true }
+
+[[bin]]
+name = "iscsi-targetd"
+path = "src/main.rs"
+required-features = ["daemon"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -29,6 +43,16 @@ windows-sys = { version = "0.61", features = [
 default = []
 # tokio 기반 Framed codec (IscsiCodec) 활성화
 codec = ["dep:tokio-util", "dep:tokio"]
+# service 계층의 구조화된 tracing event 계측
+tracing = ["dep:tracing"]
+# headless daemon 계층과 iscsi-targetd binary
+daemon = [
+    "codec",
+    "tracing",
+    "dep:tracing-subscriber",
+    "tokio/rt-multi-thread",
+    "tokio/signal",
+]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

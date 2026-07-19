@@ -23,6 +23,7 @@ pub enum ConnectionPhase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionCloseReason {
     NormalLogout,
+    ServiceShutdown,
     LoginRejected,
     LoginTimeout,
     IdleTimeout,
@@ -443,6 +444,8 @@ pub enum ConnectionError {
     MissingFullFeatureState,
     #[error("Text sequence limit {0} is outside the supported range")]
     InvalidTextSequenceLimit(usize),
+    #[error("Target service could not construct a Connection for this peer")]
+    ServiceUnavailable,
     #[error(transparent)]
     Login(#[from] TargetLoginError),
     #[error(transparent)]

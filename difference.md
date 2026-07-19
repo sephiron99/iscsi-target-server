@@ -84,10 +84,10 @@ Block Limits, Block Device Characteristics 제공.
 | 항목                | iSCSIConsole                                                  | 이 프로젝트 (plan 포함)                            |
 |---------------------|---------------------------------------------------------------|----------------------------------------------------|
 | GUI                 | WinForms (target 추가, VHD/RAM disk 생성, 디스크/volume 선택) | WinSafe 계획 (9단계, 미구현)                       |
-| 설정 저장/복원      | **없음 — 재시작마다 GUI로 재구성**                            | 설정 파일 계획 (8단계, 미구현)                     |
-| CLI / headless 실행 | 없음                                                          | 계획 (8단계, 미구현)                               |
-| service API         | 이벤트 훅 수준                                                | 계획 (8단계, 미구현)                               |
-| logging             | severity 로그 + 파일                                          | 구조화 로깅 계획 (8단계)                           |
+| 설정 저장/복원      | **없음 — 재시작마다 GUI로 재구성**                            | versioned TOML load/save + 외부 CHAP secret 파일   |
+| CLI / headless 실행 | 없음                                                          | `iscsi-targetd` TOML 설정 daemon (단일 Target)     |
+| service API         | 이벤트 훅 수준                                                | Target/LUN 추가·제거·상태 조회 구현                |
+| logging             | severity 로그 + 파일                                          | tracing 구조화 로깅 (secret/payload 미기록)        |
 | 크로스플랫폼        | Windows + Mono(Linux/macOS/WinPE)                             | 네이티브 (GUI만 Windows 전용 계획)                 |
 | initiator 구현      | basic client 포함 (`ISCSI.Client`)                            | 없음 (12단계 core 분리 시 양쪽 사용 가능성만 유지) |
 | 라이브러리 배포     | NuGet package                                                 | 12단계 crates.io 계획                              |

@@ -36,8 +36,11 @@ pub mod target_login;
 #[cfg(feature = "codec")]
 pub mod codec;
 pub mod config;
+pub mod config_file;
 #[cfg(feature = "codec")]
 pub mod connection_io;
+#[cfg(feature = "daemon")]
+pub mod daemon;
 #[cfg(feature = "codec")]
 pub mod target_service;
 
@@ -46,6 +49,9 @@ pub use bhs::{Bhs, BHS_LEN};
 pub use config::{
     AuthenticationConfig, ChapAuthenticationConfig, ConfigError, DaemonConfig, ListenConfig,
     LunBackendConfig, LunConfig, TargetConfig,
+};
+pub use config_file::{
+    ConfigFileError, ConfigFileKind, ConfigIoOperation, CONFIG_FILE_VERSION, MAX_CONFIG_FILE_LENGTH,
 };
 pub use connection::{
     ConnectionCloseReason, ConnectionError, ConnectionOutput, ConnectionPhase,
@@ -90,7 +96,8 @@ pub use target_login::{
 };
 #[cfg(feature = "codec")]
 pub use target_service::{
-    TargetService, TargetServiceConfig, TargetServiceError, TargetServiceSummary,
+    TargetService, TargetServiceConfig, TargetServiceError, TargetServiceHandle,
+    TargetServiceSummary,
 };
 
 use bytes::{BufMut, Bytes, BytesMut};

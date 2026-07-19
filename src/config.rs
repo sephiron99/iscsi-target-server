@@ -55,6 +55,7 @@ impl Default for ListenConfig {
 pub struct ChapAuthenticationConfig {
     username: String,
     secret: Zeroizing<Vec<u8>>,
+    secret_file: Option<PathBuf>,
 }
 
 impl ChapAuthenticationConfig {
@@ -63,11 +64,30 @@ impl ChapAuthenticationConfig {
         Ok(Self {
             username,
             secret: Zeroizing::new(secret),
+            secret_file: None,
+        })
+    }
+
+    pub(crate) fn from_external_secret(
+        username: String,
+        secret: Zeroizing<Vec<u8>>,
+        secret_file: PathBuf,
+    ) -> Result<Self, ConfigError> {
+        validate_credentials(&username, &secret)?;
+        Ok(Self {
+            username,
+            secret,
+            secret_file: Some(secret_file),
         })
     }
 
     pub fn username(&self) -> &str {
         &self.username
+    }
+
+    /// 설정 저장 시 secret 본문 대신 기록할 외부 파일 경로다.
+    pub fn secret_file(&self) -> Option<&Path> {
+        self.secret_file.as_deref()
     }
 
     pub fn credentials(&self) -> Result<ChapCredentials, ChapError> {
@@ -81,6 +101,7 @@ impl fmt::Debug for ChapAuthenticationConfig {
             .debug_struct("ChapAuthenticationConfig")
             .field("username", &self.username)
             .field("secret", &"[REDACTED]")
+            .field("external_secret", &self.secret_file.is_some())
             .finish()
     }
 }

@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::Semaphore;
-use tokio::time::timeout;
+use tokio::sync::{watch, Semaphore};
+use tokio::time::{timeout, Instant};
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::codec::IscsiCodec;
@@ -34,6 +34,13 @@ impl BlockingStorageExecutor {
         if max_operations == 0 {
             return Err(BlockingStorageExecutorError::InvalidLimit);
         }
+        let max_supported = Semaphore::MAX_PERMITS.min(u32::MAX as usize);
+        if max_operations > max_supported {
+            return Err(BlockingStorageExecutorError::LimitTooLarge {
+                value: max_operations,
+                max: max_supported,
+            });
+        }
         Ok(Self {
             permits: Arc::new(Semaphore::new(max_operations)),
             max_operations,
@@ -42,6 +49,25 @@ impl BlockingStorageExecutor {
 
     pub fn max_operations(&self) -> usize {
         self.max_operations
+    }
+
+    /// 모든 producer를 먼저 중단한 뒤 진행 중인 blocking 작업이 permit을 반환할 때까지
+    /// 기다린다. 새 작업과 동시에 호출하면 새 작업도 drain 대상에 포함될 수 있다.
+    pub async fn drain(&self) -> Result<(), BlockingStorageExecutorError> {
+        let count = u32::try_from(self.max_operations).map_err(|_| {
+            BlockingStorageExecutorError::LimitTooLarge {
+                value: self.max_operations,
+                max: u32::MAX as usize,
+            }
+        })?;
+        let permits = self
+            .permits
+            .clone()
+            .acquire_many_owned(count)
+            .await
+            .map_err(|_| BlockingStorageExecutorError::Closed)?;
+        drop(permits);
+        Ok(())
     }
 
     async fn receive(
@@ -84,6 +110,10 @@ impl Default for BlockingStorageExecutor {
 pub enum BlockingStorageExecutorError {
     #[error("max blocking storage operations must be greater than zero")]
     InvalidLimit,
+    #[error("max blocking storage operations {value} exceeds supported limit {max}")]
+    LimitTooLarge { value: usize, max: usize },
+    #[error("blocking storage executor closed before drain completed")]
+    Closed,
 }
 
 /// 하나의 연결 stream을 종료까지 처리한다. listener와 task 정책은 상위
@@ -95,13 +125,37 @@ pub async fn run_connection<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    run_connection_with_executor(stream, connection, BlockingStorageExecutor::default()).await
+    run_connection_loop(stream, connection, BlockingStorageExecutor::default(), None).await
 }
 
 pub async fn run_connection_with_executor<S>(
+    stream: S,
+    connection: ConnectionStateMachine,
+    storage_executor: BlockingStorageExecutor,
+) -> Result<ConnectionCloseReason, ConnectionIoError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    run_connection_loop(stream, connection, storage_executor, None).await
+}
+
+pub(crate) async fn run_connection_with_executor_and_shutdown<S>(
+    stream: S,
+    connection: ConnectionStateMachine,
+    storage_executor: BlockingStorageExecutor,
+    shutdown: watch::Receiver<bool>,
+) -> Result<ConnectionCloseReason, ConnectionIoError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    run_connection_loop(stream, connection, storage_executor, Some(shutdown)).await
+}
+
+async fn run_connection_loop<S>(
     mut stream: S,
     mut connection: ConnectionStateMachine,
     storage_executor: BlockingStorageExecutor,
+    mut shutdown: Option<watch::Receiver<bool>>,
 ) -> Result<ConnectionCloseReason, ConnectionIoError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -110,8 +164,27 @@ where
     let mut input = BytesMut::with_capacity(READ_CHUNK_LENGTH);
     let mut output = BytesMut::with_capacity(READ_CHUNK_LENGTH);
     let mut read_buffer = [0u8; READ_CHUNK_LENGTH];
+    let mut shutdown_deadline = None;
 
     loop {
+        if shutdown_deadline.is_none()
+            && shutdown.as_ref().is_some_and(|receiver| *receiver.borrow())
+        {
+            shutdown_deadline =
+                initiate_service_shutdown(&mut stream, &mut connection, &mut codec, &mut output)
+                    .await?;
+            if connection.phase() == ConnectionPhase::Closed {
+                return connection
+                    .close_reason()
+                    .ok_or(ConnectionIoError::MissingCloseReason);
+            }
+        }
+        if shutdown_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            connection.close(ConnectionCloseReason::ServiceShutdown);
+            return connection
+                .close_reason()
+                .ok_or(ConnectionIoError::MissingCloseReason);
+        }
         while let Some(frame) = codec.decode(&mut input)? {
             if !frame.ahs.is_empty() {
                 connection.on_protocol_error();
@@ -147,20 +220,31 @@ where
             }
         }
 
-        let (duration, timeout_kind) = match connection.phase() {
-            ConnectionPhase::SecurityNegotiation | ConnectionPhase::LoginOperationalNegotiation => {
-                (connection.timeouts().login, ConnectionTimeoutKind::Login)
-            }
-            ConnectionPhase::FullFeaturePhase => {
-                (connection.timeouts().idle, ConnectionTimeoutKind::Idle)
-            }
-            ConnectionPhase::Logout => {
-                (connection.timeouts().logout, ConnectionTimeoutKind::Logout)
-            }
-            ConnectionPhase::Closed => {
-                return connection
-                    .close_reason()
-                    .ok_or(ConnectionIoError::MissingCloseReason)
+        let (duration, timeout_kind) = if let Some(deadline) = shutdown_deadline {
+            (
+                deadline.saturating_duration_since(Instant::now()),
+                WaitTimeout::ServiceShutdown,
+            )
+        } else {
+            match connection.phase() {
+                ConnectionPhase::SecurityNegotiation
+                | ConnectionPhase::LoginOperationalNegotiation => (
+                    connection.timeouts().login,
+                    WaitTimeout::Connection(ConnectionTimeoutKind::Login),
+                ),
+                ConnectionPhase::FullFeaturePhase => (
+                    connection.timeouts().idle,
+                    WaitTimeout::Connection(ConnectionTimeoutKind::Idle),
+                ),
+                ConnectionPhase::Logout => (
+                    connection.timeouts().logout,
+                    WaitTimeout::Connection(ConnectionTimeoutKind::Logout),
+                ),
+                ConnectionPhase::Closed => {
+                    return connection
+                        .close_reason()
+                        .ok_or(ConnectionIoError::MissingCloseReason)
+                }
             }
         };
         let input_limit = max_buffered_input_length(codec.frame_config());
@@ -173,22 +257,56 @@ where
             return Err(ConnectionIoError::InputBufferLimit { limit: input_limit });
         }
         let read_length = remaining.min(read_buffer.len());
-        let read = match timeout(duration, stream.read(&mut read_buffer[..read_length])).await {
-            Ok(result) => result?,
-            Err(_) => {
-                if timeout_kind == ConnectionTimeoutKind::Idle
-                    && !connection.has_pending_keepalive()
+        let event = read_event(
+            &mut stream,
+            &mut read_buffer[..read_length],
+            duration,
+            if shutdown_deadline.is_none() {
+                shutdown.as_mut()
+            } else {
+                None
+            },
+        )
+        .await?;
+        let read = match event {
+            ReadEvent::Data(read) => read,
+            ReadEvent::Shutdown => {
+                shutdown_deadline = initiate_service_shutdown(
+                    &mut stream,
+                    &mut connection,
+                    &mut codec,
+                    &mut output,
+                )
+                .await?;
+                if connection.phase() == ConnectionPhase::Closed {
+                    return connection
+                        .close_reason()
+                        .ok_or(ConnectionIoError::MissingCloseReason);
+                }
+                continue;
+            }
+            ReadEvent::Timeout => match timeout_kind {
+                WaitTimeout::ServiceShutdown => {
+                    connection.close(ConnectionCloseReason::ServiceShutdown);
+                    return connection
+                        .close_reason()
+                        .ok_or(ConnectionIoError::MissingCloseReason);
+                }
+                WaitTimeout::Connection(ConnectionTimeoutKind::Idle)
+                    if !connection.has_pending_keepalive() =>
                 {
                     let probe = connection.keepalive_probe(0)?;
                     write_pdu(&mut stream, &mut codec, &mut output, probe).await?;
                     stream.flush().await?;
                     continue;
                 }
-                connection.on_timeout(timeout_kind);
-                return connection
-                    .close_reason()
-                    .ok_or(ConnectionIoError::MissingCloseReason);
-            }
+                WaitTimeout::Connection(timeout_kind) => {
+                    connection.on_timeout(timeout_kind);
+                    return connection
+                        .close_reason()
+                        .ok_or(ConnectionIoError::MissingCloseReason);
+                }
+            },
         };
         if read == 0 {
             connection.on_transport_error();
@@ -198,6 +316,74 @@ where
         }
         input.extend_from_slice(&read_buffer[..read]);
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WaitTimeout {
+    Connection(ConnectionTimeoutKind),
+    ServiceShutdown,
+}
+
+enum ReadEvent {
+    Data(usize),
+    Timeout,
+    Shutdown,
+}
+
+async fn read_event<S>(
+    stream: &mut S,
+    buffer: &mut [u8],
+    duration: std::time::Duration,
+    mut shutdown: Option<&mut watch::Receiver<bool>>,
+) -> Result<ReadEvent, std::io::Error>
+where
+    S: AsyncRead + Unpin,
+{
+    if let Some(receiver) = shutdown.as_mut() {
+        loop {
+            tokio::select! {
+                changed = receiver.changed() => {
+                    if changed.is_err() || *receiver.borrow() {
+                        return Ok(ReadEvent::Shutdown);
+                    }
+                }
+                result = timeout(duration, stream.read(buffer)) => {
+                    return match result {
+                        Ok(read) => read.map(ReadEvent::Data),
+                        Err(_) => Ok(ReadEvent::Timeout),
+                    };
+                }
+            }
+        }
+    }
+    match timeout(duration, stream.read(buffer)).await {
+        Ok(read) => read.map(ReadEvent::Data),
+        Err(_) => Ok(ReadEvent::Timeout),
+    }
+}
+
+async fn initiate_service_shutdown<S>(
+    stream: &mut S,
+    connection: &mut ConnectionStateMachine,
+    codec: &mut IscsiCodec,
+    output: &mut BytesMut,
+) -> Result<Option<Instant>, ConnectionIoError>
+where
+    S: AsyncWrite + Unpin,
+{
+    if connection.phase() != ConnectionPhase::FullFeaturePhase {
+        connection.close(ConnectionCloseReason::ServiceShutdown);
+        return Ok(None);
+    }
+    let timeout = connection
+        .timeouts()
+        .logout
+        .min(std::time::Duration::from_secs(u64::from(u16::MAX)));
+    let timeout_seconds = timeout.as_secs() as u16;
+    let request = connection.request_logout(timeout_seconds)?;
+    write_pdu(stream, codec, output, request).await?;
+    stream.flush().await?;
+    Ok(Some(Instant::now() + timeout))
 }
 
 fn requires_blocking_storage(pdu: &Pdu) -> bool {
@@ -440,6 +626,87 @@ mod tests {
         first_result.unwrap();
         let (_, second_result) = second.await.unwrap().unwrap();
         second_result.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn storage_executor_drain_waits_for_started_blocking_operation() {
+        let executor = BlockingStorageExecutor::new(1).unwrap();
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (connection, command) = established_read_connection(GatedBackend {
+            started: Some(started_tx),
+            gate: gate.clone(),
+        });
+        let operation_executor = executor.clone();
+        let operation =
+            tokio::spawn(async move { operation_executor.receive(connection, command).await });
+        started_rx.await.unwrap();
+
+        let drain_executor = executor.clone();
+        let mut draining = tokio::spawn(async move { drain_executor.drain().await });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut draining)
+                .await
+                .is_err()
+        );
+
+        release_gate(&gate);
+        let (_, result) = operation.await.unwrap().unwrap();
+        result.unwrap();
+        draining.await.unwrap().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn service_shutdown_waits_for_blocking_storage_before_closing_connection() {
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (mut connection, command) = established_read_connection(GatedBackend {
+            started: Some(started_tx),
+            gate: gate.clone(),
+        });
+        let mut timeouts = connection.timeouts();
+        timeouts.logout = Duration::from_millis(50);
+        connection.set_timeouts(timeouts);
+        let executor = BlockingStorageExecutor::new(1).unwrap();
+        let (mut client, server_stream) = tokio::io::duplex(4096);
+        let (shutdown, receiver) = watch::channel(false);
+        let mut server = tokio::spawn(run_connection_with_executor_and_shutdown(
+            server_stream,
+            connection,
+            executor,
+            receiver,
+        ));
+
+        let mut codec = IscsiCodec::new();
+        let mut wire = BytesMut::new();
+        codec.encode(command, &mut wire).unwrap();
+        client.write_all(&wire).await.unwrap();
+        started_rx.await.unwrap();
+        shutdown.send(true).unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(50), &mut server)
+            .await
+            .is_err());
+
+        release_gate(&gate);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), server)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            ConnectionCloseReason::ServiceShutdown
+        );
+    }
+
+    #[test]
+    fn storage_executor_rejects_a_limit_that_cannot_be_drained() {
+        let max_supported = Semaphore::MAX_PERMITS.min(u32::MAX as usize);
+        let invalid = max_supported.saturating_add(1);
+        assert!(matches!(
+            BlockingStorageExecutor::new(invalid),
+            Err(BlockingStorageExecutorError::LimitTooLarge { value, max })
+                if value == invalid && max == max_supported
+        ));
     }
 
     #[tokio::test]
