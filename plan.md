@@ -231,6 +231,24 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 - [ ] USB 메모리 디스크 시나리오: read-only/read-write 전체 disk serve(자동 mount 상태에서 시작), volume 단위 serve, serve 중 장치 제거 시 CHECK CONDITION과 connection 유지 검증
 - [ ] 지원 범위와 알려진 제한 문서화
 
+### USB storage CLI 검증 절차 (Windows 실기기)
+
+이 절차가 성공하면 위의 USB 시나리오 항목과 7단계의 `[-]` removable/USB 항목을 완료로 올린다.
+
+1. 준비: Windows에 rustup과 VS Build Tools를 설치하고 `cargo build --release --features daemon`으로 `iscsi-targetd.exe`를 빌드한다.
+2. 대상 확인: `Get-Disk | Format-Table Number, FriendlyName, BusType, Size, IsSystem`에서 `BusType`이 `USB`인 디스크의 `Number`를 확인한다. `IsSystem = True`인 디스크는 사용하지 않는다.
+3. 설정 파일: `backend = "windows-physical-drive"` + `device-number`로 전체 disk LUN을 구성한다. 첫 검증은 `read-only = true`로 시작하고, volume 단위 검증은 `backend = "windows-volume"` + `drive-letter`를 사용한다.
+4. 구조 검증: `iscsi-targetd.exe --config usb.toml --check` (장치를 열지 않으므로 일반 권한으로 가능하다).
+5. 실행: 관리자 PowerShell에서 `--log-level debug`로 실행하고 stdout의 `listening` 줄을 확인한다.
+6. Initiator 연결: `iscsicpl`에서 포털(같은 PC는 `127.0.0.1`) 추가 → Target 연결 → 디스크 관리에서 disk 인식, read/write/flush 수행. 원격 검증 시 TCP 3260 방화벽 인바운드를 허용한다.
+7. 확인 항목:
+   - read-only 전체 disk serve에서 sector size 조회(geometry fallback 포함)와 read가 동작한다.
+   - read-write 전체 disk serve 시작 시 해당 disk의 mounted volume이 일괄 lock/dismount된다. USB의 파일을 열어 둔 상태에서는 시작이 실패해야 한다.
+   - volume 단위 serve가 lock+dismount 후 동작한다.
+   - serve 중 USB 제거 시 initiator가 CHECK CONDITION(medium error)을 받고 connection이 유지된다.
+   - Ctrl+C로 storage drain을 포함한 graceful shutdown이 되고 종료 후 volume이 다시 mount된다.
+   - 실패 시 `StorageIoError`의 operation/`ErrorKind`/OS error code를 기록해 원인을 좁힌다.
+
 완료 조건:
 
 - Linux와 Windows Initiator에서 반복 가능한 end-to-end 테스트가 성공한다.
