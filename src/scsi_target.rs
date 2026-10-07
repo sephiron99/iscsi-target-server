@@ -546,8 +546,13 @@ impl ScsiTarget {
         let list_length = self.luns.len().saturating_mul(8);
         let mut output = vec![0; 8 + list_length];
         output[..4].copy_from_slice(&(list_length as u32).to_be_bytes());
-        for (slot, lun) in output[8..].chunks_exact_mut(8).zip(self.luns.keys()) {
-            slot.copy_from_slice(&lun.to_be_bytes());
+        for (slot, lun) in output[8..]
+            .as_chunks_mut::<8>()
+            .0
+            .iter_mut()
+            .zip(self.luns.keys())
+        {
+            *slot = lun.to_be_bytes();
         }
         output.truncate(output.len().min(allocation));
         ScsiExecution::good(output)

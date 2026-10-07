@@ -172,9 +172,9 @@ fn decode_binary(value: &str) -> Result<Zeroizing<Vec<u8>>, ChapError> {
             return Err(ChapError::InvalidBinaryValue);
         }
         let mut bytes = Vec::with_capacity(hex.len() / 2);
-        for pair in hex.as_bytes().chunks_exact(2) {
-            let high = hex_digit(pair[0]).ok_or(ChapError::InvalidBinaryValue)?;
-            let low = hex_digit(pair[1]).ok_or(ChapError::InvalidBinaryValue)?;
+        for &[high, low] in hex.as_bytes().as_chunks::<2>().0 {
+            let high = hex_digit(high).ok_or(ChapError::InvalidBinaryValue)?;
+            let low = hex_digit(low).ok_or(ChapError::InvalidBinaryValue)?;
             bytes.push((high << 4) | low);
         }
         bytes
