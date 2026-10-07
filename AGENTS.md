@@ -19,8 +19,16 @@
 
 원본 동작과 표준이 충돌하면 표준을 우선하고, 호환성에 영향이 있다면 의도적인 차이를 문서화한다.
 
-Windows 10, 11은 반드시 지원되야 한다.
-Windows에서 USB memory 저장장치도 Storage Backend로 반드시 지원되어야 한다.
+## 지원 target
+
+이 Target Server의 지원 target은 Windows 10과 Windows 11뿐이다. 그 외 운영체제(Linux, macOS, BSD, Windows 8.1 이하 등)는 지원, 검증과 배포 대상에서 배제한다.
+
+- Windows 10, 11은 반드시 지원되어야 한다.
+- Windows에서 USB memory 저장장치도 Storage Backend로 반드시 지원되어야 한다.
+- Windows 이외 target을 위한 기능, platform backend, packaging과 호환성 작업을 추가하지 않는다.
+- 설계나 구현이 Windows와 다른 target 사이에서 충돌하면 Windows 동작을 기준으로 결정한다.
+- WSL/Linux host에서의 build와 test는 개발 및 CI 편의를 위한 것이며 해당 target을 지원한다는 의미가 아니다.
+- 이 제한은 서버가 실행되는 target에 대한 것이다. Linux open-iscsi 등 다른 운영체제의 Initiator와의 상호운용성 검증은 그대로 유지한다.
 
 ## 완료와 배포 원칙
 

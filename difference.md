@@ -88,7 +88,7 @@ Block Limits, Block Device Characteristics 제공.
 | CLI / headless 실행 | 없음                                                          | `iscsi-targetd` TOML 설정 daemon (단일 Target)     |
 | service API         | 이벤트 훅 수준                                                | Target/LUN 추가·제거·상태 조회 구현                |
 | logging             | severity 로그 + 파일                                          | tracing 구조화 로깅 (secret/payload 미기록)        |
-| 크로스플랫폼        | Windows + Mono(Linux/macOS/WinPE)                             | 네이티브 (GUI만 Windows 전용 계획)                 |
+| 크로스플랫폼        | Windows + Mono(Linux/macOS/WinPE)                             | Windows 10/11 전용 (그 외 OS 배제)                 |
 | initiator 구현      | basic client 포함 (`ISCSI.Client`)                            | 없음 (12단계 core 분리 시 양쪽 사용 가능성만 유지) |
 | 라이브러리 배포     | NuGet package                                                 | 12단계 crates.io 계획                              |
 
