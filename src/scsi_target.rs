@@ -176,7 +176,7 @@ impl FileBackend {
         Self::from_file(file, block_size, true)
     }
 
-    pub fn create_sparse(
+    pub fn create_fixed(
         path: impl AsRef<Path>,
         block_size: u32,
         block_count: u64,
@@ -985,7 +985,7 @@ mod tests {
     fn file_backend_uses_file_size_and_persists_blocks() {
         let path = temp_image_path("rw");
         {
-            let mut backend = FileBackend::create_sparse(&path, 512, 2).unwrap();
+            let mut backend = FileBackend::create_fixed(&path, 512, 2).unwrap();
             backend.set_durable_flush(false);
             assert_eq!(backend.block_count(), 2);
             backend.write_blocks(1, &[0x6d; 512]).unwrap();
@@ -1021,7 +1021,7 @@ mod tests {
         fs::remove_file(unaligned).unwrap();
 
         let path = temp_image_path("ro");
-        FileBackend::create_sparse(&path, 512, 1).unwrap();
+        FileBackend::create_fixed(&path, 512, 1).unwrap();
         let mut target = ScsiTarget::default();
         target.add_lun(0, FileBackend::open_read_only(&path, 512).unwrap());
         let mut write = [0; 16];
@@ -1033,11 +1033,11 @@ mod tests {
     }
 
     #[test]
-    fn sparse_creation_never_truncates_an_existing_file_and_keeps_io_context() {
+    fn fixed_creation_never_truncates_an_existing_file_and_keeps_io_context() {
         let path = temp_image_path("existing");
         fs::write(&path, b"keep-this-data").unwrap();
 
-        let error = FileBackend::create_sparse(&path, 512, 1).unwrap_err();
+        let error = FileBackend::create_fixed(&path, 512, 1).unwrap_err();
         let StorageError::Io(error) = error else {
             panic!("expected contextual I/O error");
         };
