@@ -424,7 +424,6 @@ fn read_secret_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, ConfigFileError> 
     if !metadata.is_file() {
         return Err(ConfigFileError::SecretNotRegularFile(path.to_path_buf()));
     }
-    validate_secret_permissions(path, &metadata)?;
     read_bounded(
         file,
         path,
@@ -432,31 +431,6 @@ fn read_secret_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, ConfigFileError> 
         ConfigFileKind::Secret,
         metadata.len(),
     )
-}
-
-#[cfg(unix)]
-fn validate_secret_permissions(
-    path: &Path,
-    metadata: &fs::Metadata,
-) -> Result<(), ConfigFileError> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
-        return Err(ConfigFileError::InsecureSecretPermissions {
-            path: path.to_path_buf(),
-            mode,
-        });
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn validate_secret_permissions(
-    _path: &Path,
-    _metadata: &fs::Metadata,
-) -> Result<(), ConfigFileError> {
-    Ok(())
 }
 
 fn read_bounded_file(
@@ -525,18 +499,14 @@ fn line_column(input: &str, byte_index: usize) -> (usize, usize) {
 }
 
 fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), ConfigFileError> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let mut last_collision = None;
     for _ in 0..16 {
         let temporary_path = temporary_path(path);
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
+        let mut temporary = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)
         {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut temporary = match options.open(&temporary_path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 last_collision = Some(error);
@@ -561,7 +531,6 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), ConfigFileError> {
         fs::rename(&temporary_path, path)
             .map_err(|source| io_error(ConfigIoOperation::Replace, path, source))?;
         guard.commit();
-        sync_parent_directory(parent)?;
         return Ok(());
     }
     Err(io_error(
@@ -578,18 +547,6 @@ fn temporary_path(destination: &Path) -> PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("config");
     destination.with_file_name(format!(".{name}.tmp-{}-{counter}", std::process::id()))
-}
-
-#[cfg(unix)]
-fn sync_parent_directory(path: &Path) -> Result<(), ConfigFileError> {
-    File::open(path)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|source| io_error(ConfigIoOperation::SyncDirectory, path, source))
-}
-
-#[cfg(not(unix))]
-fn sync_parent_directory(_path: &Path) -> Result<(), ConfigFileError> {
-    Ok(())
 }
 
 struct TemporaryFileGuard {
@@ -661,8 +618,6 @@ pub enum ConfigIoOperation {
     Sync,
     #[error("replace")]
     Replace,
-    #[error("sync directory")]
-    SyncDirectory,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -693,8 +648,6 @@ pub enum ConfigFileError {
     EmptySecretPath,
     #[error("CHAP secret path {0:?} is not a regular file")]
     SecretNotRegularFile(PathBuf),
-    #[error("CHAP secret file {path:?} has insecure Unix mode {mode:#o}; group/other permissions must be zero")]
-    InsecureSecretPermissions { path: PathBuf, mode: u32 },
     #[error(
         "Target {0:?} uses an in-memory CHAP secret and cannot be saved; load it from secret-file"
     )]
@@ -738,11 +691,6 @@ mod tests {
 
     fn write_secret(path: &Path, secret: &[u8]) {
         fs::write(path, secret).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
-        }
     }
 
     fn configuration(secret_file: &str) -> String {
@@ -805,15 +753,6 @@ durable-flush = true
         assert!(saved.contains("secret-file"));
         assert!(!saved.contains("external-only-secret"));
         assert_eq!(DaemonConfig::load_from_file(&saved_path).unwrap(), config);
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(saved_path).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
     }
 
     #[test]
@@ -879,24 +818,6 @@ durable-flush = true
         let saved = fs::read_to_string(&path).unwrap();
         assert!(!saved.contains("sensitive-byte-sequence"));
         assert_eq!(DaemonConfig::load_from_file(path).unwrap(), config);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn secret_file_with_group_or_other_permissions_is_rejected() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let directory = TestDirectory::new("permissions");
-        let secret_path = directory.path("chap.secret");
-        fs::write(&secret_path, b"secret").unwrap();
-        fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o640)).unwrap();
-        let config_path = directory.path("target.toml");
-        fs::write(&config_path, configuration("chap.secret")).unwrap();
-
-        assert!(matches!(
-            DaemonConfig::load_from_file(config_path),
-            Err(ConfigFileError::InsecureSecretPermissions { mode: 0o640, .. })
-        ));
     }
 
     #[test]

@@ -204,23 +204,9 @@ impl Daemon {
     }
 }
 
-/// Ctrl-C(SIGINT)와 Unix SIGTERM 중 먼저 도착하는 신호를 기다린다.
+/// Ctrl-C 신호를 기다린다.
 pub async fn shutdown_signal() -> Result<(), std::io::Error> {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-        let mut interrupt = signal(SignalKind::interrupt())?;
-        let mut terminate = signal(SignalKind::terminate())?;
-        tokio::select! {
-            _ = interrupt.recv() => {}
-            _ = terminate.recv() => {}
-        }
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        tokio::signal::ctrl_c().await
-    }
+    tokio::signal::ctrl_c().await
 }
 
 #[derive(Debug, thiserror::Error)]
