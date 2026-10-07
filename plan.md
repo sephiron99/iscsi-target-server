@@ -126,7 +126,7 @@
 - [x] Data-Out의 `DataSN`, `BufferOffset`, final bit와 중복/누락 검증
 - [x] Data-In segment 분할, `DataSN`, status 동봉과 residual 처리
 - [x] `FirstBurstLength`, `MaxBurstLength`, `MaxOutstandingR2T` 적용
-- [ ] `DataPDUInOrder`, `DataSequenceInOrder` 지원 범위 결정
+- [x] `DataPDUInOrder`, `DataSequenceInOrder` 지원 범위 결정 (Yes/Yes 고정, 순서가 어긋난 Data PDU와 sequence는 지원하지 않음)
 - [x] bounded blocking storage 실행, TCP backpressure와 connection별 buffered byte 상한
 
 완료 조건:

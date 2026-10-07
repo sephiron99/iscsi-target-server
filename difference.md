@@ -35,7 +35,7 @@ InitiatorName/ISID/endpoint 기반 허용·거부 훅만 제공한다.
 | Reject                                 | 있음                                                        | 있음                                                  |
 | ERL                                    | 0                                                           | 0                                                     |
 | MC/S (`MaxConnections`)                | 1 ("implementation limit")                                  | 1                                                     |
-| `DataPDUInOrder`/`DataSequenceInOrder` | 기본값 Yes/Yes 고정                                         | 지원 범위 결정 예정 (plan 6단계)                      |
+| `DataPDUInOrder`/`DataSequenceInOrder` | 기본값 Yes/Yes 고정                                         | Yes/Yes 고정                                          |
 | sequence number wraparound 산술        | 일반 정수 비교 위주                                         | serial number 산술 (`serial.rs`)                      |
 | peer 입력 자원 상한                    | 제한적                                                      | frame/text/buffered byte 상한 + bounded blocking 실행 |
 

@@ -19,8 +19,6 @@ pub const DEFAULT_FIRST_BURST_LENGTH: u32 = 64 * 1024;
 pub const DEFAULT_TIME2_WAIT: u16 = 2;
 pub const DEFAULT_TIME2_RETAIN: u16 = 20;
 pub const DEFAULT_MAX_OUTSTANDING_R2T: u16 = 1;
-pub const DEFAULT_DATA_PDU_IN_ORDER: bool = true;
-pub const DEFAULT_DATA_SEQUENCE_IN_ORDER: bool = true;
 pub const DEFAULT_ERROR_RECOVERY_LEVEL: u8 = 0;
 pub const ISCSI_PROTOCOL_LEVEL: u8 = 1;
 
@@ -152,8 +150,6 @@ pub struct TargetLoginPolicy {
     default_time2_wait: u16,
     default_time2_retain: u16,
     max_outstanding_r2t: u16,
-    data_pdu_in_order: bool,
-    data_sequence_in_order: bool,
     error_recovery_level: ErrorRecoveryLevel,
     task_reporting: TaskReporting,
 }
@@ -178,8 +174,6 @@ impl Default for TargetLoginPolicy {
             default_time2_wait: DEFAULT_TIME2_WAIT,
             default_time2_retain: DEFAULT_TIME2_RETAIN,
             max_outstanding_r2t: DEFAULT_MAX_OUTSTANDING_R2T,
-            data_pdu_in_order: DEFAULT_DATA_PDU_IN_ORDER,
-            data_sequence_in_order: DEFAULT_DATA_SEQUENCE_IN_ORDER,
             error_recovery_level: ErrorRecoveryLevel::default(),
             task_reporting: TaskReporting::default(),
         }
@@ -356,22 +350,6 @@ impl TargetLoginPolicy {
         Ok(())
     }
 
-    pub fn data_pdu_in_order(&self) -> bool {
-        self.data_pdu_in_order
-    }
-
-    pub fn set_data_pdu_in_order(&mut self, value: bool) {
-        self.data_pdu_in_order = value;
-    }
-
-    pub fn data_sequence_in_order(&self) -> bool {
-        self.data_sequence_in_order
-    }
-
-    pub fn set_data_sequence_in_order(&mut self, value: bool) {
-        self.data_sequence_in_order = value;
-    }
-
     pub fn error_recovery_level(&self) -> ErrorRecoveryLevel {
         self.error_recovery_level
     }
@@ -461,8 +439,6 @@ mod tests {
         assert_eq!(policy.default_time2_wait(), 2);
         assert_eq!(policy.default_time2_retain(), 20);
         assert_eq!(policy.max_outstanding_r2t(), 1);
-        assert!(policy.data_pdu_in_order());
-        assert!(policy.data_sequence_in_order());
         assert_eq!(policy.error_recovery_level(), ErrorRecoveryLevel::Level0);
         assert_eq!(policy.task_reporting(), TaskReporting::Rfc3720);
         assert_eq!(policy.iscsi_protocol_level(), 1);

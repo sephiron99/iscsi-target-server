@@ -395,14 +395,13 @@ impl TargetLoginProcessor {
                         selected.parse().map_err(|_| LOGIN_STATUS_INVALID_REQUEST)?;
                     response.push(key, &selected)
                 }
-                "DataPDUInOrder" => response.push(
-                    key,
-                    yes_no(parse_bool(value)? || self.policy.data_pdu_in_order()),
-                ),
-                "DataSequenceInOrder" => response.push(
-                    key,
-                    yes_no(parse_bool(value)? || self.policy.data_sequence_in_order()),
-                ),
+                // RFC 7143 §13.18, §13.19: 결과 함수가 OR이므로 Target이 Yes를 내면
+                // 항상 Yes가 된다. Data 전송 경로는 offset 순서의 PDU와 sequence만
+                // 수용하므로 Yes로 고정하고, 제안 값은 형식만 검증한다.
+                "DataPDUInOrder" | "DataSequenceInOrder" => {
+                    parse_bool(value)?;
+                    response.push(key, "Yes")
+                }
                 "ErrorRecoveryLevel" => {
                     let policy = if session_type == SessionType::Discovery {
                         0
