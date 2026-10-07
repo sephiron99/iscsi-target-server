@@ -1,0 +1,49 @@
+# iscsi-targetd 수동 테스트용 설정.
+#
+# 검증:  iscsi-targetd.exe --config test.toml --check
+# 실행:  iscsi-targetd.exe --config test.toml --log-level debug
+#
+# 실행 후 Windows `iscsicpl`에서 포털 127.0.0.1:3260을 추가해 연결한다.
+# daemon은 현재 단일 Target만 지원한다.
+
+version = 1
+
+[listen]
+# 다른 PC의 Initiator에서 접속하려면 "0.0.0.0"으로 바꾸고 TCP 3260 인바운드를 허용한다.
+address = "127.0.0.1"
+port = 3260
+
+[[targets]]
+name = "iqn.2026-10.local.test:disk"
+
+# LUN 0: 64MiB memory disk. 파일이나 장치 없이 바로 동작하며 종료하면 내용이 사라진다.
+[[targets.luns]]
+lun = 0
+backend = "memory"
+block-size = 512
+block-count = 131072
+
+# 이미지 파일 LUN. 파일은 미리 만들어 두어야 하고 크기는 block-size의 배수여야 한다.
+# 상대 경로는 이 설정 파일의 위치를 기준으로 해석한다.
+# [[targets.luns]]
+# lun = 1
+# backend = "file"
+# path = "test-disk.img"
+# block-size = 512
+# read-only = false
+# durable-flush = true
+
+# USB 등 물리 disk 전체. 관리자 권한이 필요하다. device-number는
+# `Get-Disk`의 Number이며 IsSystem = True인 disk는 사용하지 않는다.
+# [[targets.luns]]
+# lun = 2
+# backend = "windows-physical-drive"
+# device-number = 1
+# read-only = true
+
+# volume 단위 serve. 관리자 권한이 필요하다.
+# [[targets.luns]]
+# lun = 3
+# backend = "windows-volume"
+# drive-letter = "E"
+# read-only = true
