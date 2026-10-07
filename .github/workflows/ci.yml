@@ -18,9 +18,11 @@ jobs:
           rustup component add clippy rustfmt
       - name: Format
         run: cargo fmt --all -- --check
+      # .cargo/config.toml의 기본 target(i686-pc-windows-gnu)은 runner에 mingw-w64
+      # toolchain이 없어 쓸 수 없으므로 runner의 MSVC target을 명시한다.
       - name: Test without default features
-        run: cargo test --no-default-features
+        run: cargo test --no-default-features --target x86_64-pc-windows-msvc
       - name: Test all features
-        run: cargo test --all-features
+        run: cargo test --all-features --target x86_64-pc-windows-msvc
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features --target x86_64-pc-windows-msvc -- -D warnings

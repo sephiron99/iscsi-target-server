@@ -180,11 +180,13 @@ sequence number를 구현할 때는 serial number 산술과 wraparound를 명시
 
 ```sh
 cargo fmt --all -- --check
-cargo test --no-default-features
-cargo test --all-features
-cargo clippy --all-targets --all-features -- -D warnings
+cargo cross test --no-default-features
+cargo cross test --all-features
+cargo cross clippy --all-targets --all-features -- -D warnings
 git diff --check
 ```
+
+`.cargo/config.toml`의 기본 build target은 `i686-pc-windows-gnu`이다. WSL host에서는 `cargo cross`가 mingw-w64 toolchain을 구성하고 WSL interop으로 Windows test binary를 실행한다. `cargo cross` 없이 `cargo test`를 직접 실행하면 linker를 찾지 못해 실패한다.
 
 관련 변경에는 다음 테스트를 포함한다.
 

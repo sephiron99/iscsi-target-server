@@ -235,7 +235,7 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 
 이 절차가 성공하면 위의 USB 시나리오 항목과 7단계의 `[-]` removable/USB 항목을 완료로 올린다.
 
-1. 준비: Windows에 rustup과 VS Build Tools를 설치하고 `cargo build --release --features daemon`으로 `iscsi-targetd.exe`를 빌드한다.
+1. 준비: WSL에서 `cargo build-win32`(`cargo cross`, 기본 target `i686-pc-windows-gnu`)로 `iscsi-targetd.exe`를 cross-build하고 `target/i686-pc-windows-gnu/release/`의 결과물을 Windows로 복사한다.
 2. 대상 확인: `Get-Disk | Format-Table Number, FriendlyName, BusType, Size, IsSystem`에서 `BusType`이 `USB`인 디스크의 `Number`를 확인한다. `IsSystem = True`인 디스크는 사용하지 않는다.
 3. 설정 파일: `backend = "windows-physical-drive"` + `device-number`로 전체 disk LUN을 구성한다. 첫 검증은 `read-only = true`로 시작하고, volume 단위 검증은 `backend = "windows-volume"` + `drive-letter`를 사용한다.
 4. 구조 검증: `iscsi-targetd.exe --config usb.toml --check` (장치를 열지 않으므로 일반 권한으로 가능하다).
@@ -292,11 +292,13 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 
 ```sh
 cargo fmt --all -- --check
-cargo test --no-default-features
-cargo test --all-features
-cargo clippy --all-targets --all-features -- -D warnings
+cargo cross test --no-default-features
+cargo cross test --all-features
+cargo cross clippy --all-targets --all-features -- -D warnings
 git diff --check
 ```
+
+`.cargo/config.toml`의 기본 build target은 `i686-pc-windows-gnu`이다. WSL host에서는 `cargo cross`가 mingw-w64 toolchain을 구성하고 WSL interop으로 Windows test binary를 실행한다. `cargo cross` 없이 `cargo test`를 직접 실행하면 linker를 찾지 못해 실패한다.
 
 Windows GUI가 추가된 뒤에는 Windows runner에서 GUI target의 build/check도 필수 검증에 포함한다.
 Windows storage backend는 GUI 도입 전부터 `windows-latest` runner에서 all-features test와 clippy를 실행한다.
