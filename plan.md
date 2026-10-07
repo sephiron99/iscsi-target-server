@@ -112,7 +112,7 @@
 - [x] `SYNCHRONIZE CACHE (10/16)`
 - [x] unsupported/invalid CDB의 CHECK CONDITION과 sense data 생성
 - [x] SCSI status, sense, underflow/overflow와 residual count 검증
-- [ ] Data 전송 경로를 통한 Initiator block read/write/flush 통합 검증
+- [x] Data 전송 경로를 통한 Initiator block read/write/flush 통합 검증
 
 완료 조건:
 
