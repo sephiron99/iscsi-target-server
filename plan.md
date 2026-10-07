@@ -1,6 +1,6 @@
 # iSCSI Target Server 남은 작업 계획
 
-최종 갱신: 2026-07-18
+최종 갱신: 2026-10-08
 
 ## 상태 표기
 
@@ -14,6 +14,7 @@
 - protocol core, Target/Session, SCSI, Storage, 관리 UI의 의존 방향을 분리한다.
 - 먼저 end-to-end로 동작하는 Target Server를 완성한다.
 - PDU 등 core의 별도 크레이트 분리와 publish는 프로젝트 완성 후 마지막 단계에서 수행한다.
+- VHD/VMDK 가상 디스크 포맷 지원은 1~12단계의 모든 과업이 완성된 뒤 최후 순위(13단계)로 미룬다. 그 전에는 조사, 의존성 추가와 구현을 시작하지 않는다.
 - 각 단계는 정상 동작뿐 아니라 잘못된 peer 입력, 자원 제한과 상태 전환 테스트를 포함해야 완료로 본다.
 
 ## 현재 출발점
@@ -143,7 +144,6 @@
 - [x] sparse file 및 durable flush 정책
 - [x] 새 sparse image 생성 시 기존 파일 덮어쓰기 방지
 - [x] read-only LUN과 write protection sense 처리
-- [ ] VHD/VMDK 지원 범위와 외부 라이브러리 도입 여부 조사
 - [x] Windows physical disk/volume backend를 별도 platform 모듈로 격리
 - [x] backend 오류를 SCSI sense로 변환하는 규칙
 - [x] backend I/O 오류의 작업 종류, `ErrorKind`와 OS error code 보존
@@ -155,6 +155,8 @@
 
 - protocol/Session 계층이 파일 경로나 Win32 타입을 알지 않고 backend를 사용할 수 있다.
 - 여러 Session의 동시 I/O, flush와 종료 시 데이터 일관성이 검증된다.
+
+VHD/VMDK 지원은 이 단계의 범위가 아니며 13단계로 미뤘다. 이 단계의 image backend는 raw IMG/file만 뜻한다.
 
 ## 8. Target daemon, 설정과 CLI
 
@@ -287,6 +289,18 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 
 - 추출 후에도 Target Server의 전체 테스트와 상호운용성 테스트가 동일하게 성공한다.
 - core 크레이트가 Target 설정, GUI, Storage와 async runtime에 기본 의존하지 않는다.
+
+## 13. VHD/VMDK 지원 (최후 순위)
+
+이 단계는 1~12단계의 모든 과업이 완료된 뒤에만 시작한다. 그 전까지 VHD/VMDK는 지원하지 않는 backend이며, 지원 범위와 알려진 제한 문서에 미지원으로 기록한다.
+
+- [ ] VHD/VMDK 지원 범위와 외부 라이브러리 도입 여부 조사 — 원본 DiskAccessLibrary의 지원 범위(fixed/dynamic VHD, VMDK)를 기준선으로 사용
+- [ ] 조사 결과에 따른 backend 구현과 `StorageBackend` trait 뒤 격리
+
+완료 조건:
+
+- 조사로 정한 지원 범위의 가상 디스크 image를 LUN으로 serve할 수 있다.
+- 추가한 의존성과 직접 번역 부분의 라이선스와 출처가 기록되어 있다.
 
 ## 공통 검증 명령
 

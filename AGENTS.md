@@ -225,10 +225,13 @@ git diff --check
 2. Login 정책, 응답 생성과 Connection 상태
 3. Session, sequencing, command 추적, Logout, recovery와 discovery
 4. SCSI command 실행, status, sense, residual과 LUN 동작
-5. Storage 인터페이스와 안전한 file/image backend, 이후 platform backend
+5. Storage 인터페이스와 안전한 raw file/image backend, 이후 platform backend
 6. Target daemon과 설정/관리 인터페이스
 7. Initiator 상호운용성, 장시간 실행, 비정상 입력과 recovery 테스트
 8. 재사용 크레이트 추출, API 안정화, 문서화와 라이선스 감사
 9. 명시적으로 승인된 마지막 단계로 publish
+10. VHD/VMDK 가상 디스크 포맷 지원 — 위의 모든 과업이 완성된 뒤 최후 순위
+
+VHD/VMDK는 10번에 도달하기 전에는 조사, 의존성 추가와 구현을 시작하지 않는다. 그때까지 지원하는 image backend는 raw IMG/file뿐이다.
 
 아키텍처, 검증 명령 또는 배포 계획이 실질적으로 바뀌면 이 문서를 갱신한다.
