@@ -147,6 +147,9 @@ pub enum LunBackendConfig {
     WindowsPhysicalDrive {
         device_number: u32,
         read_only: bool,
+        /// Initiator에게 MBR signature와 GPT의 disk/partition GUID를 가상 값으로 보여 준다.
+        /// 원본 disk가 함께 보이는 같은 PC의 Initiator에 내줄 때 필요하다.
+        virtual_disk_identity: bool,
     },
     WindowsVolume {
         drive_letter: char,

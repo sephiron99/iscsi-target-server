@@ -17,6 +17,7 @@ pub mod connection;
 pub mod control;
 mod control_state;
 pub mod digest;
+pub mod disk_identity;
 pub mod error;
 pub mod frame;
 pub mod login;

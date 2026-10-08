@@ -284,6 +284,8 @@ enum LunDocument {
         device_number: u32,
         #[serde(default)]
         read_only: bool,
+        #[serde(default)]
+        virtual_disk_identity: bool,
     },
     WindowsVolume {
         lun: u64,
@@ -328,11 +330,13 @@ impl LunDocument {
                 lun,
                 device_number,
                 read_only,
+                virtual_disk_identity,
             } => (
                 lun,
                 LunBackendConfig::WindowsPhysicalDrive {
                     device_number,
                     read_only,
+                    virtual_disk_identity,
                 },
             ),
             Self::WindowsVolume {
@@ -377,10 +381,12 @@ impl LunDocument {
             LunBackendConfig::WindowsPhysicalDrive {
                 device_number,
                 read_only,
+                virtual_disk_identity,
             } => Self::WindowsPhysicalDrive {
                 lun: lun.lun(),
                 device_number: *device_number,
                 read_only: *read_only,
+                virtual_disk_identity: *virtual_disk_identity,
             },
             LunBackendConfig::WindowsVolume {
                 drive_letter,
@@ -874,6 +880,7 @@ durable-flush = true
             LunBackendConfig::WindowsPhysicalDrive {
                 device_number: 3,
                 read_only: true,
+                virtual_disk_identity: true,
             },
             LunBackendConfig::WindowsVolume {
                 drive_letter: 'U',
@@ -891,5 +898,53 @@ durable-flush = true
         config.save_to_file(&path).unwrap();
 
         assert_eq!(DaemonConfig::load_from_file(path).unwrap(), config);
+    }
+
+    #[test]
+    fn virtual_disk_identity_defaults_to_off_and_parses_from_its_kebab_case_key() {
+        let directory = TestDirectory::new("identity");
+        let path = directory.path("identity.toml");
+        fs::write(
+            &path,
+            r#"version = 1
+
+[[targets]]
+name = "iqn.2026-10.example.com:identity"
+
+[[targets.luns]]
+lun = 0
+backend = "windows-physical-drive"
+device-number = 2
+
+[[targets.luns]]
+lun = 1
+backend = "windows-physical-drive"
+device-number = 3
+virtual-disk-identity = true
+"#,
+        )
+        .unwrap();
+
+        let config = DaemonConfig::load_from_file(path).unwrap();
+        let backends: Vec<_> = config.targets()[0]
+            .luns()
+            .iter()
+            .map(|lun| lun.backend().clone())
+            .collect();
+        assert_eq!(
+            backends,
+            [
+                LunBackendConfig::WindowsPhysicalDrive {
+                    device_number: 2,
+                    read_only: false,
+                    virtual_disk_identity: false,
+                },
+                LunBackendConfig::WindowsPhysicalDrive {
+                    device_number: 3,
+                    read_only: false,
+                    virtual_disk_identity: true,
+                },
+            ]
+        );
     }
 }

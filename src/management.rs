@@ -223,7 +223,8 @@ fn build_backend(config: &LunBackendConfig) -> Result<Box<dyn StorageBackend>, M
         LunBackendConfig::WindowsPhysicalDrive {
             device_number,
             read_only,
-        } => build_windows_physical_drive(*device_number, *read_only),
+            virtual_disk_identity,
+        } => build_windows_physical_drive(*device_number, *read_only, *virtual_disk_identity),
         LunBackendConfig::WindowsVolume {
             drive_letter,
             read_only,
@@ -244,19 +245,27 @@ fn windows_access(read_only: bool) -> crate::platform::windows::WindowsStorageAc
 fn build_windows_physical_drive(
     device_number: u32,
     read_only: bool,
+    virtual_disk_identity: bool,
 ) -> Result<Box<dyn StorageBackend>, ManagementError> {
-    Ok(Box::new(
+    let backend: Box<dyn StorageBackend> = Box::new(
         crate::platform::windows::WindowsStorageBackend::open_physical_drive(
             device_number,
             windows_access(read_only),
         )?,
-    ))
+    );
+    if virtual_disk_identity {
+        return Ok(Box::new(crate::disk_identity::VirtualDiskIdentity::new(
+            backend,
+        )?));
+    }
+    Ok(backend)
 }
 
 #[cfg(not(windows))]
 fn build_windows_physical_drive(
     _device_number: u32,
     _read_only: bool,
+    _virtual_disk_identity: bool,
 ) -> Result<Box<dyn StorageBackend>, ManagementError> {
     Err(ManagementError::WindowsBackendUnavailable)
 }

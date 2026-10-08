@@ -150,6 +150,7 @@
 - [-] Windows CI workflow에 physical disk/volume backend compile 및 단위 테스트 추가, 첫 runner 검증 대기
 - [-] removable/USB physical disk 지원: sector size 조회의 `IOCTL_DISK_GET_DRIVE_GEOMETRY` fallback과 disk 전체 read-write serve 시 mounted volume 일괄 lock/dismount, 실기기 검증 대기
 - [-] physical disk serve 전 경고 후 offline 전환과 종료 시 online 복원 (`IOCTL_DISK_SET_DISK_ATTRIBUTES`, 재부팅 후 비유지). 전환을 지원하지 않는 disk는 경고 후 기존 volume lock 방식으로 fallback, 실기기 검증 대기
+- [-] 같은 PC의 Initiator를 위한 disk 식별자 가상화 (`virtual-disk-identity`): MBR signature, GPT disk GUID와 partition GUID를 Initiator에게만 다른 값으로 제시하고 원본 disk의 값은 보존. Windows의 "Redundant Path"/"Collision" offline 판정 회피가 목적. 같은 PC의 Windows Initiator에서 read-write LUN이 Online으로 올라와 volume이 mount되는 것은 실기기 확인, 파일 write와 partition 변경(GPT write 경로)은 실기기 검증 대기
 - [ ] physical disk 열거 API (device number, description, serial number, bus type, removable 여부) — GUI/CLI 디스크 선택용
 
 완료 조건:
