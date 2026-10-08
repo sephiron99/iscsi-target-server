@@ -530,14 +530,23 @@ impl ScsiTarget {
     }
 
     pub fn execute(&mut self, lun: u64, cdb: &[u8; 16], data_out: &[u8]) -> ScsiExecution {
+        let result = self.execute_command(lun, cdb, data_out);
+        log_command(lun, cdb, &result);
+        result
+    }
+
+    fn execute_command(&mut self, lun: u64, cdb: &[u8; 16], data_out: &[u8]) -> ScsiExecution {
         if cdb[0] == 0xa0 {
             return self.report_luns(cdb);
         }
         let Some(device) = self.luns.get_mut(&lun) else {
-            return check_condition(SENSE_ILLEGAL_REQUEST, 0x25, 0x00);
+            let result = check_condition(SENSE_ILLEGAL_REQUEST, 0x25, 0x00);
+            log_check_condition(lun, cdb, &result.sense);
+            return result;
         };
         let result = execute_lun(device, cdb, data_out, self.max_transfer_length);
         if result.status == STATUS_CHECK_CONDITION {
+            log_check_condition(lun, cdb, &result.sense);
             device.last_sense = result.sense.clone();
         }
         result
@@ -786,8 +795,84 @@ fn storage_error(error: StorageError) -> ScsiExecution {
         StorageError::OutOfRange => check_condition(SENSE_ILLEGAL_REQUEST, 0x21, 0x00),
         StorageError::Misaligned => check_condition(SENSE_ILLEGAL_REQUEST, 0x1a, 0x00),
         StorageError::ReadOnly => check_condition(SENSE_DATA_PROTECT, 0x27, 0x00),
-        StorageError::Io(_) => check_condition(0x03, 0x11, 0x00),
+        StorageError::Io(error) => {
+            log_storage_io_error(&error);
+            check_condition(0x03, 0x11, 0x00)
+        }
     }
+}
+
+// 로그에는 LUN, opcode, 대상 LBA 또는 page code, sense와 backend 오류 요약만 남긴다.
+// data payload는 어떤 레벨에서도 기록하지 않는다.
+
+fn log_command(lun: u64, cdb: &[u8; 16], result: &ScsiExecution) {
+    #[cfg(feature = "tracing")]
+    tracing::trace!(
+        lun,
+        opcode = format_args!("{:#04x}", cdb[0]),
+        lba = cdb_lba(cdb),
+        page = cdb_page_code(cdb).map(|page| format!("{page:#04x}")),
+        status = format_args!("{:#04x}", result.status),
+        data_in_length = result.data.len(),
+        "SCSI 명령을 실행했다"
+    );
+    #[cfg(not(feature = "tracing"))]
+    let _ = (lun, cdb, result);
+}
+
+fn log_check_condition(lun: u64, cdb: &[u8; 16], sense: &[u8]) {
+    // read-only LUN에 대한 write는 Initiator 쪽에서 조용히 실패할 수 있으므로 기본 로그
+    // 레벨에서도 보이게 한다.
+    #[cfg(feature = "tracing")]
+    if sense.get(2).copied().unwrap_or(0) & 0x0f == SENSE_DATA_PROTECT {
+        tracing::warn!(
+            lun,
+            opcode = format_args!("{:#04x}", cdb[0]),
+            lba = cdb_lba(cdb),
+            "read-only LUN에 대한 write 요청을 거부했다"
+        );
+        return;
+    }
+    #[cfg(feature = "tracing")]
+    tracing::debug!(
+        lun,
+        opcode = format_args!("{:#04x}", cdb[0]),
+        lba = cdb_lba(cdb),
+        page = cdb_page_code(cdb).map(|page| format!("{page:#04x}")),
+        sense_key = format_args!("{:#04x}", sense.get(2).copied().unwrap_or(0) & 0x0f),
+        asc = format_args!("{:#04x}", sense.get(12).copied().unwrap_or(0)),
+        ascq = format_args!("{:#04x}", sense.get(13).copied().unwrap_or(0)),
+        "SCSI 명령이 CHECK CONDITION으로 끝났다"
+    );
+    #[cfg(not(feature = "tracing"))]
+    let _ = (lun, cdb, sense);
+}
+
+/// READ/WRITE (10/12/16) CDB의 시작 LBA.
+#[cfg(feature = "tracing")]
+fn cdb_lba(cdb: &[u8; 16]) -> Option<u64> {
+    match cdb[0] {
+        0x28 | 0x2a | 0xa8 | 0xaa => Some(u64::from(be_u32(cdb, 2))),
+        0x88 | 0x8a => Some(be_u64(cdb, 2)),
+        _ => None,
+    }
+}
+
+/// INQUIRY와 MODE SENSE (6/10) CDB의 page code.
+#[cfg(feature = "tracing")]
+fn cdb_page_code(cdb: &[u8; 16]) -> Option<u8> {
+    match cdb[0] {
+        0x12 => Some(cdb[2]),
+        0x1a | 0x5a => Some(cdb[2] & 0x3f),
+        _ => None,
+    }
+}
+
+fn log_storage_io_error(error: &StorageIoError) {
+    #[cfg(feature = "tracing")]
+    tracing::warn!(%error, "Storage backend I/O 오류를 MEDIUM ERROR로 보고한다");
+    #[cfg(not(feature = "tracing"))]
+    let _ = error;
 }
 
 fn check_condition(key: u8, asc: u8, ascq: u8) -> ScsiExecution {
