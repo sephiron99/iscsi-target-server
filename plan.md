@@ -242,7 +242,7 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 
 1. 준비: WSL에서 `cargo build-win32`(`cargo cross`, 기본 target `i686-pc-windows-gnu`)로 `iscsi-targetd.exe`를 cross-build하고 `target/i686-pc-windows-gnu/release/`의 결과물을 Windows로 복사한다.
 2. 대상 확인: `Get-Disk | Format-Table Number, FriendlyName, BusType, Size, IsSystem`에서 `BusType`이 `USB`인 디스크의 `Number`를 확인한다. `IsSystem = True`인 디스크는 사용하지 않는다.
-3. 설정 파일: `backend = "windows-physical-drive"` + `device-number`로 전체 disk LUN을 구성한다. 첫 검증은 `read-only = true`로 시작하고, volume 단위 검증은 `backend = "windows-volume"` + `drive-letter`를 사용한다.
+3. 설정 파일: 저장소의 `sample.toml`(모든 옵션의 설명과 backend별 예시)을 `usb.toml`로 복사해, `backend = "windows-physical-drive"` + `device-number`로 전체 disk LUN을 구성한다. 첫 검증은 `read-only = true`로 시작하고, volume 단위 검증은 `backend = "windows-volume"` + `drive-letter`를 사용한다.
 4. 구조 검증: `iscsi-targetd.exe --config usb.toml --check` (장치를 열지 않으므로 일반 권한으로 가능하다).
 5. 실행: 관리자 PowerShell에서 `--log-level debug`로 실행하고 stdout의 `listening` 줄을 확인한다.
 6. Initiator 연결: `iscsicpl`에서 포털(같은 PC는 `127.0.0.1`) 추가 → Target 연결 → 디스크 관리에서 disk 인식, read/write/flush 수행. 원격 검증 시 TCP 3260 방화벽 인바운드를 허용한다.

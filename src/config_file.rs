@@ -901,6 +901,36 @@ durable-flush = true
     }
 
     #[test]
+    fn sample_configuration_loads_and_serves_only_a_memory_disk() {
+        // 저장소의 예시 파일이 schema와 어긋나지 않게 한다. 그대로 실행해도 장치를 열지
+        // 않도록 활성화된 LUN은 memory backend 하나여야 한다.
+        let directory = TestDirectory::new("sample");
+        let path = directory.path("sample.toml");
+        fs::write(&path, include_str!("../sample.toml")).unwrap();
+
+        let config = DaemonConfig::load_from_file(path).unwrap();
+        assert_eq!(config.targets().len(), 1);
+        let target = &config.targets()[0];
+        assert_eq!(target.authentication(), &AuthenticationConfig::None);
+        let backends: Vec<_> = target
+            .luns()
+            .iter()
+            .map(|lun| (lun.lun(), lun.backend().clone()))
+            .collect();
+        assert_eq!(
+            backends,
+            [(
+                0,
+                LunBackendConfig::Memory {
+                    block_size: 512,
+                    block_count: 1_310_720,
+                    read_only: false,
+                }
+            )]
+        );
+    }
+
+    #[test]
     fn virtual_disk_identity_defaults_to_off_and_parses_from_its_kebab_case_key() {
         let directory = TestDirectory::new("identity");
         let path = directory.path("identity.toml");

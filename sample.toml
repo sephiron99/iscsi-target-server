@@ -1,0 +1,203 @@
+# ==============================================================================
+# iscsi-targetd 설정 파일 예시
+# ==============================================================================
+#
+# 이 파일을 복사해 고쳐 쓴다. 그대로 실행하면 640MiB memory disk 하나를 내보낸다.
+#
+#   검증:  iscsi-targetd.exe --config sample.toml --check
+#   실행:  iscsi-targetd.exe --config sample.toml
+#   로그:  --log-level <trace|debug|info|warn|error>  (기본 info)
+#
+# 실행 후 Windows `iscsicpl`에서 포털(아래 [listen]의 주소와 port)을 추가해 연결한다.
+#
+# 표기 규칙
+#   - "필수"라고 적지 않은 key는 생략할 수 있고, 생략하면 적힌 기본값을 쓴다.
+#   - 여기에 없는 key를 쓰면 오류로 거부한다.
+#   - 상대 경로는 이 설정 파일이 있는 directory를 기준으로 해석한다.
+
+
+# ------------------------------------------------------------------------------
+# 1. 파일 형식
+# ------------------------------------------------------------------------------
+
+# version (필수)
+#   설정 파일 형식의 version. 현재 1만 받는다.
+version = 1
+
+
+# ------------------------------------------------------------------------------
+# 2. 전역 제한
+# ------------------------------------------------------------------------------
+# TOML 규칙상 이 절의 key는 첫 [table]보다 앞에 적어야 한다.
+
+# max-connections (기본 128)
+#   동시에 유지할 TCP connection 수의 상한. 1 이상.
+# max-connections = 128
+
+# max-blocking-storage-operations (기본 32)
+#   동시에 실행할 storage I/O 수의 상한. 1 이상.
+#   이 수를 넘는 요청은 앞선 I/O가 끝날 때까지 기다린다.
+# max-blocking-storage-operations = 32
+
+
+# ------------------------------------------------------------------------------
+# 3. [listen] — Initiator의 접속을 받을 주소
+# ------------------------------------------------------------------------------
+
+[listen]
+
+# address (기본 "::")
+#   listen할 IP 주소.
+#     "127.0.0.1"  이 PC의 Initiator만 접속한다.
+#     "0.0.0.0"    모든 IPv4 주소에서 받는다. 다른 PC의 Initiator가 접속하려면 이 값이나
+#                  이 PC의 실제 주소를 적고, Windows 방화벽에서 아래 port의 TCP
+#                  인바운드를 허용한다.
+#     "::"         모든 IPv6 주소에서 받는다.
+address = "127.0.0.1"
+
+# port (기본 3260)
+#   listen할 TCP port. 1~65535. iSCSI의 표준 port는 3260이다.
+port = 3260
+
+
+# ------------------------------------------------------------------------------
+# 4. [[targets]] — Target
+# ------------------------------------------------------------------------------
+# daemon은 Target을 정확히 하나만 받는다. 이 블록이 없거나 둘 이상이면 시작을 거부한다.
+# 여러 disk는 Target을 늘리지 않고 아래 6절의 [[targets.luns]]를 늘려 내보낸다.
+
+[[targets]]
+
+# name (필수)
+#   Target의 iSCSI name. Initiator의 대상 목록에 이 이름이 나타난다.
+#   "iqn.<연도>-<월>.<뒤집은 domain>:<임의의 이름>" 형식을 쓰며 223 byte 이하여야 한다.
+#   각 disk의 serial number와 장치 식별자를 이 이름에서 만들므로, 이름을 바꾸면
+#   Initiator는 처음 보는 disk로 취급한다.
+name = "iqn.2026-10.local.test:disk"
+
+
+# ------------------------------------------------------------------------------
+# 5. [targets.authentication] — Initiator 인증
+# ------------------------------------------------------------------------------
+# 이 블록을 생략하면 인증 없이 접속을 받는다 (method = "none").
+
+# method (기본 "none")
+#     "none"         인증하지 않는다.
+#     "chap"         CHAP으로 인증한 Initiator만 받는다.
+#     "prefer-chap"  CHAP을 먼저 제안하되 인증 없는 접속도 받는다.
+#   Target이 Initiator를 확인하는 단방향 CHAP이다.
+#
+# username ("chap", "prefer-chap"에서 필수)
+#   Initiator가 CHAP에서 제시할 이름. Windows Initiator의 기본값은 Initiator의 IQN이다.
+#
+# secret-file ("chap", "prefer-chap"에서 필수)
+#   CHAP secret이 들어 있는 파일의 경로. secret을 이 설정 파일에 직접 적을 수는 없다.
+#   파일 내용 전체가 그대로 secret이다. 줄바꿈도 secret에 포함되므로 끝에 줄바꿈을
+#   넣지 않는다. 1~1024 byte. Windows Initiator는 12~16자의 secret을 요구한다.
+#
+# [targets.authentication]
+# method = "chap"
+# username = "iqn.1991-05.com.microsoft:my-pc"
+# secret-file = "chap-secret.bin"
+
+
+# ------------------------------------------------------------------------------
+# 6. [[targets.luns]] — 내보낼 disk
+# ------------------------------------------------------------------------------
+# 블록 하나가 disk 하나이다. 여러 disk를 내보내려면 블록을 여러 개 적는다.
+#
+# 모든 backend에 공통인 key
+#
+#   lun (필수)
+#     Initiator에게 보이는 LUN 번호. 0~16383이며 블록마다 달라야 한다.
+#     disk가 하나뿐이면 0을 쓴다.
+#
+#   backend (필수)
+#     disk의 내용을 어디에 둘지 정한다. 아래 6.1~6.4 중 하나이며, backend마다 쓰는
+#     key가 다르다.
+#
+#   read-only (기본 false)
+#     true이면 Initiator의 write를 거부한다. Windows는 이 disk의 volume을 읽기 전용으로
+#     mount한다.
+
+
+# --- 6.1 backend = "memory" — RAM에 두는 disk -----------------------------------
+# 파일이나 장치 없이 바로 동작한다. daemon을 시작할 때마다 비어 있고, 종료하면 내용이
+# 사라진다. 비어 있는 disk라서 Initiator에서 초기화와 포맷을 해야 드라이브로 보인다.
+#
+#   block-size (필수)   block 하나의 크기(byte). 보통 512.
+#   block-count (필수)  block 수. disk 크기는 block-size × block-count이다.
+#                       아래 값은 512 × 1310720 = 640MiB.
+
+[[targets.luns]]
+lun = 0
+backend = "memory"
+block-size = 512
+block-count = 1310720
+read-only = false
+
+
+# --- 6.2 backend = "file" — 이미지 파일 -----------------------------------------
+# raw 이미지 파일을 disk로 내보낸다. 파일은 미리 만들어 두어야 하고, 파일 크기가 disk
+# 크기가 된다. VHD, VMDK 같은 가상 disk 형식은 지원하지 않는다.
+#
+#   path (필수)          이미지 파일의 경로.
+#   block-size (필수)    block 하나의 크기(byte). 파일 크기가 이 값의 배수여야 한다.
+#   durable-flush (기본 true)
+#                        true이면 Initiator가 flush를 요청할 때마다 OS에 disk 기록까지
+#                        요구한다. false이면 OS cache에만 넘기므로 빠르지만, 전원이
+#                        끊기면 Initiator가 기록됐다고 믿는 data를 잃을 수 있다.
+#
+# [[targets.luns]]
+# lun = 1
+# backend = "file"
+# path = "disk.img"
+# block-size = 512
+# read-only = false
+# durable-flush = true
+
+
+# --- 6.3 backend = "windows-physical-drive" — 물리 disk 전체 ---------------------
+# USB 메모리를 포함한 물리 disk 하나를 통째로 내보낸다. 관리자 권한으로 실행해야 한다.
+#
+# serve를 시작하면 경고 로그를 남기고 이 disk를 offline으로 바꾼다. serve하는 동안 이
+# PC에서는 이 disk의 드라이브에 접근할 수 없고, daemon을 정상 종료하면 online으로
+# 되돌린다. daemon이 비정상 종료해 되돌리지 못했으면 재부팅하거나
+# `Set-Disk -Number <번호> -IsOffline $false`로 되돌린다. offline 전환에 실패한 disk는
+# 경고 후 online 상태로 serve한다.
+#
+#   device-number (필수)
+#     disk 번호. PowerShell `Get-Disk`의 Number이다. disk를 꽂는 순서에 따라 번호가
+#     바뀔 수 있으므로 실행 전에 확인한다. IsSystem = True인 disk는 쓰지 않는다.
+#
+#   virtual-disk-identity (기본 false)
+#     같은 PC의 Initiator로 접속할 때 true로 둔다. 원본 disk와 iSCSI disk의 식별자가
+#     같으면 Windows가 iSCSI disk를 "Redundant Path"나 "Collision"으로 offline 처리하기
+#     때문이다. true이면 Initiator에게 MBR signature, GPT disk GUID와 partition GUID만
+#     다른 값으로 보여 주고 원본 disk에 기록된 값은 바꾸지 않는다.
+#     다른 PC의 Initiator만 접속한다면 false로 둔다.
+#     true일 때는 Windows가 원본 disk에 기억해 둔 드라이브 문자를 쓰지 않으므로 문자가
+#     달라질 수 있고, "드라이브 문자 자동 할당 안 함" 속성의 partition은 탐색기에
+#     나타나지 않는다.
+#
+# [[targets.luns]]
+# lun = 2
+# backend = "windows-physical-drive"
+# device-number = 2
+# read-only = false
+# virtual-disk-identity = true
+
+
+# --- 6.4 backend = "windows-volume" — volume 하나 --------------------------------
+# 드라이브 문자가 붙은 volume 하나를 disk로 내보낸다. 관리자 권한으로 실행해야 한다.
+# Initiator에게는 partition table이 없는 disk로 보인다.
+# 쓰기를 허용하면(read-only = false) serve하는 동안 이 PC에서 volume을 잠그고 dismount한다.
+# 그 volume의 파일을 열어 둔 프로그램이 있으면 시작에 실패한다.
+#
+#   drive-letter (필수)  내보낼 volume의 드라이브 문자. 영문자 하나.
+#
+# [[targets.luns]]
+# lun = 3
+# backend = "windows-volume"
+# drive-letter = "E"
+# read-only = true
