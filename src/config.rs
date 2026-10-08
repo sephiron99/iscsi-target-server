@@ -10,6 +10,7 @@ use zeroize::Zeroizing;
 use crate::auth::{validate_credentials, ChapCredentials, ChapError};
 use crate::login::IscsiName;
 use crate::login_policy::{AuthenticationPolicy, TargetLoginPolicy};
+use crate::scsi_target::MAX_LUN;
 
 pub const DEFAULT_ISCSI_PORT: u16 = 3260;
 pub const DEFAULT_MAX_SERVICE_CONNECTIONS: usize = 128;
@@ -189,7 +190,11 @@ pub struct LunConfig {
 }
 
 impl LunConfig {
+    /// `lun`은 Initiator에게 보이는 LUN 번호이며 `0..=MAX_LUN` 범위여야 한다.
     pub fn new(lun: u64, backend: LunBackendConfig) -> Result<Self, ConfigError> {
+        if lun > MAX_LUN {
+            return Err(ConfigError::InvalidLun(lun));
+        }
         backend.validate()?;
         Ok(Self { lun, backend })
     }
@@ -391,6 +396,8 @@ pub enum ConfigError {
     DuplicateTarget(IscsiName),
     #[error("duplicate LUN {0}")]
     DuplicateLun(u64),
+    #[error("LUN {0} is outside the supported range 0..={MAX_LUN}")]
+    InvalidLun(u64),
     #[error("block geometry {block_size} * {block_count} is invalid")]
     InvalidBlockGeometry { block_size: u32, block_count: u64 },
     #[error("backend path is empty")]
@@ -418,6 +425,20 @@ mod tests {
         assert_eq!(
             ListenConfig::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
             Err(ConfigError::InvalidPort)
+        );
+    }
+
+    #[test]
+    fn lun_numbers_are_limited_to_the_encodable_range() {
+        let backend = LunBackendConfig::Memory {
+            block_size: 512,
+            block_count: 1,
+            read_only: false,
+        };
+        assert_eq!(LunConfig::new(16383, backend.clone()).unwrap().lun(), 16383);
+        assert_eq!(
+            LunConfig::new(16384, backend),
+            Err(ConfigError::InvalidLun(16384))
         );
     }
 

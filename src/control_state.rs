@@ -1338,7 +1338,9 @@ mod tests {
             max_outstanding_r2t: 1,
         });
         let mut target = ScsiTarget::default();
-        target.add_lun(0, MemoryBackend::new(512, 8).unwrap());
+        target
+            .add_lun(0, MemoryBackend::new(512, 8).unwrap())
+            .unwrap();
         let target = SharedScsiTarget::from(target);
         let mut sequence = SequenceState::new(10, 0, 4).unwrap();
         let mut cdb = [0; 16];
@@ -1444,7 +1446,9 @@ mod tests {
             max_outstanding_r2t: 1,
         });
         let mut target = ScsiTarget::default();
-        target.add_lun(0, MemoryBackend::new(512, 8).unwrap());
+        target
+            .add_lun(0, MemoryBackend::new(512, 8).unwrap())
+            .unwrap();
         let target = SharedScsiTarget::from(target);
         let mut sequence = SequenceState::new(10, 0, 4).unwrap();
         let mut cdb = [0; 16];
@@ -1503,7 +1507,9 @@ mod tests {
             vec![DiscoveryTarget::new(target_name)],
         );
         let mut target = ScsiTarget::default();
-        target.add_lun(0, MemoryBackend::new(512, 8).unwrap());
+        target
+            .add_lun(0, MemoryBackend::new(512, 8).unwrap())
+            .unwrap();
         let target = SharedScsiTarget::from(target);
         let mut sequence = SequenceState::new(10, 7, 4).unwrap();
         let mut cdb = [0; 16];
@@ -1572,7 +1578,9 @@ mod tests {
             vec![DiscoveryTarget::new(target_name)],
         );
         let mut target = ScsiTarget::default();
-        target.add_lun(0, MemoryBackend::new(512, 8).unwrap());
+        target
+            .add_lun(0, MemoryBackend::new(512, 8).unwrap())
+            .unwrap();
         let target = SharedScsiTarget::from(target);
         let mut sequence = SequenceState::new(10, 0, 4).unwrap();
         let mut cdb = [0; 16];

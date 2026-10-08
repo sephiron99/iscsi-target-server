@@ -543,7 +543,9 @@ mod tests {
     fn full_feature_scsi_commands_dispatch_to_the_configured_lun() {
         let mut connection = established_connection();
         let mut target = ScsiTarget::default();
-        target.add_lun(0, MemoryBackend::new(512, 32).unwrap());
+        target
+            .add_lun(0, MemoryBackend::new(512, 32).unwrap())
+            .unwrap();
         connection.set_scsi_target(target);
 
         let mut inquiry = [0; 16];
@@ -578,7 +580,9 @@ mod tests {
     fn initial_r2t_write_validates_data_out_and_commits_on_final_segment() {
         let mut connection = established_connection();
         let mut target = ScsiTarget::default();
-        target.add_lun(0, MemoryBackend::new(512, 32).unwrap());
+        target
+            .add_lun(0, MemoryBackend::new(512, 32).unwrap())
+            .unwrap();
         connection.set_scsi_target(target);
 
         let mut cdb = [0; 16];

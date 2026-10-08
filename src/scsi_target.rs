@@ -12,6 +12,56 @@ pub const STATUS_GOOD: u8 = 0x00;
 pub const STATUS_CHECK_CONDITION: u8 = 0x02;
 pub const DEFAULT_MAX_SCSI_TRANSFER_LENGTH: usize = 16 * 1024 * 1024;
 
+/// 설정할 수 있는 가장 큰 LUN 번호. single level LUN의 flat space addressing이 14 bit이다
+/// (SAM-5 §4.7.7.3).
+pub const MAX_LUN: u64 = 0x3fff;
+
+/// peripheral device addressing으로 표현하는 LUN 번호의 상한 (SAM-5 §4.7.7.2).
+const MAX_PERIPHERAL_LUN: u64 = 0xff;
+const LUN_ADDRESS_METHOD_MASK: u64 = 0xc0;
+const LUN_ADDRESS_METHOD_PERIPHERAL: u64 = 0x00;
+const LUN_ADDRESS_METHOD_FLAT: u64 = 0x40;
+
+/// LUN 번호를 iSCSI BHS와 REPORT LUNS가 쓰는 8-byte LUN 값으로 바꾼다.
+///
+/// SAM-5 §4.7.5의 single level LUN 구조를 따른다. 8 byte 중 앞 2 byte만 쓰고 나머지는
+/// 0이다. 255 이하는 bus identifier 0의 peripheral device addressing, 그보다 큰 번호는
+/// flat space addressing으로 인코딩한다. 그래서 LUN 0은 값 0이지만 LUN 1은
+/// `0x0001_0000_0000_0000`이다.
+pub fn encode_lun(lun: u64) -> Option<u64> {
+    let address = if lun <= MAX_PERIPHERAL_LUN {
+        lun
+    } else if lun <= MAX_LUN {
+        (LUN_ADDRESS_METHOD_FLAT << 8) | lun
+    } else {
+        return None;
+    };
+    Some(address << 48)
+}
+
+/// Initiator가 보낸 8-byte LUN 값을 LUN 번호로 바꾼다.
+///
+/// peripheral device addressing(bus identifier 0)과 flat space addressing만 받는다.
+/// 둘째 level 이하가 0이 아니거나 다른 addressing method를 쓴 값은 이 Target에 없는
+/// logical unit이므로 `None`을 반환한다.
+pub fn decode_lun(wire: u64) -> Option<u64> {
+    if wire & 0x0000_ffff_ffff_ffff != 0 {
+        return None;
+    }
+    let first = wire >> 56;
+    let second = (wire >> 48) & 0xff;
+    match first & LUN_ADDRESS_METHOD_MASK {
+        LUN_ADDRESS_METHOD_PERIPHERAL if first == 0 => Some(second),
+        LUN_ADDRESS_METHOD_FLAT => Some(((first & !LUN_ADDRESS_METHOD_MASK) << 8) | second),
+        _ => None,
+    }
+}
+
+/// [`MAX_LUN`]을 넘어 SAM LUN으로 표현할 수 없는 LUN 번호.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("LUN {0} is outside the supported range 0..={MAX_LUN}")]
+pub struct InvalidLun(pub u64);
+
 const SENSE_NO_SENSE: u8 = 0x00;
 const SENSE_ILLEGAL_REQUEST: u8 = 0x05;
 const SENSE_DATA_PROTECT: u8 = 0x07;
@@ -374,8 +424,11 @@ impl std::fmt::Debug for Lun {
 
 #[derive(Debug)]
 pub struct ScsiTarget {
+    /// LUN 번호를 key로 한다. wire의 8-byte LUN 값은 [`decode_lun`]으로 바꿔 찾는다.
     luns: BTreeMap<u64, Lun>,
     max_transfer_length: usize,
+    /// logical unit의 장치 식별자를 다른 Target과 구분하는 값. 보통 Target의 iSCSI name이다.
+    identity_namespace: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -407,7 +460,7 @@ impl SharedScsiTarget {
         if target.luns.contains_key(&lun) {
             return Err(SharedScsiTargetError::DuplicateLun(lun));
         }
-        target.add_boxed_lun(lun, backend);
+        target.add_boxed_lun(lun, backend)?;
         Ok(())
     }
 
@@ -457,6 +510,8 @@ pub enum SharedScsiTargetError {
     Poisoned,
     #[error("shared SCSI Target already contains LUN {0}")]
     DuplicateLun(u64),
+    #[error(transparent)]
+    InvalidLun(#[from] InvalidLun),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -472,16 +527,26 @@ impl Default for ScsiTarget {
         Self {
             luns: BTreeMap::new(),
             max_transfer_length: DEFAULT_MAX_SCSI_TRANSFER_LENGTH,
+            identity_namespace: Vec::new(),
         }
     }
 }
 
 impl ScsiTarget {
+    /// logical unit의 장치 식별자(VPD 0x80, 0x83)를 다른 Target과 구분하는 값을 정한다.
+    ///
+    /// 식별자는 이 값과 LUN 번호에서 만든다. 같은 Initiator가 여러 Target에 연결해도
+    /// 서로 다른 disk로 보이도록 Target마다 고유한 값, 보통 iSCSI name을 준다.
+    pub fn set_identity_namespace(&mut self, namespace: impl AsRef<[u8]>) {
+        self.identity_namespace = namespace.as_ref().to_vec();
+    }
+
+    /// `lun`은 LUN 번호이다. 같은 번호가 이미 있으면 교체하고 이전 backend를 반환한다.
     pub fn add_lun(
         &mut self,
         lun: u64,
         backend: impl StorageBackend + 'static,
-    ) -> Option<Box<dyn StorageBackend>> {
+    ) -> Result<Option<Box<dyn StorageBackend>>, InvalidLun> {
         self.add_boxed_lun(lun, Box::new(backend))
     }
 
@@ -489,8 +554,12 @@ impl ScsiTarget {
         &mut self,
         lun: u64,
         backend: Box<dyn StorageBackend>,
-    ) -> Option<Box<dyn StorageBackend>> {
-        self.luns
+    ) -> Result<Option<Box<dyn StorageBackend>>, InvalidLun> {
+        if lun > MAX_LUN {
+            return Err(InvalidLun(lun));
+        }
+        Ok(self
+            .luns
             .insert(
                 lun,
                 Lun {
@@ -498,7 +567,7 @@ impl ScsiTarget {
                     last_sense: Bytes::new(),
                 },
             )
-            .map(|old| old.backend)
+            .map(|old| old.backend))
     }
 
     pub fn remove_lun(&mut self, lun: u64) -> Option<Box<dyn StorageBackend>> {
@@ -529,6 +598,7 @@ impl ScsiTarget {
             .collect()
     }
 
+    /// `lun`은 iSCSI BHS의 8-byte LUN 값이다. LUN 번호가 아니다.
     pub fn execute(&mut self, lun: u64, cdb: &[u8; 16], data_out: &[u8]) -> ScsiExecution {
         let result = self.execute_command(lun, cdb, data_out);
         log_command(lun, cdb, &result);
@@ -539,12 +609,17 @@ impl ScsiTarget {
         if cdb[0] == 0xa0 {
             return self.report_luns(cdb);
         }
-        let Some(device) = self.luns.get_mut(&lun) else {
-            let result = check_condition(SENSE_ILLEGAL_REQUEST, 0x25, 0x00);
-            log_check_condition(lun, cdb, &result.sense);
+        let Some((number, device)) =
+            decode_lun(lun).and_then(|number| Some((number, self.luns.get_mut(&number)?)))
+        else {
+            let result = execute_unsupported_lun(cdb);
+            if result.status == STATUS_CHECK_CONDITION {
+                log_check_condition(lun, cdb, &result.sense);
+            }
             return result;
         };
-        let result = execute_lun(device, cdb, data_out, self.max_transfer_length);
+        let identity = DeviceIdentity::new(&self.identity_namespace, number);
+        let result = execute_lun(device, identity, cdb, data_out, self.max_transfer_length);
         if result.status == STATUS_CHECK_CONDITION {
             log_check_condition(lun, cdb, &result.sense);
             device.last_sense = result.sense.clone();
@@ -552,29 +627,97 @@ impl ScsiTarget {
         result
     }
 
+    /// REPORT LUNS (SPC-4 §6.33). 어느 LUN으로 보내도 같은 목록을 돌려준다.
     fn report_luns(&self, cdb: &[u8; 16]) -> ScsiExecution {
-        if cdb[2] > 2 {
-            return check_condition(SENSE_ILLEGAL_REQUEST, 0x24, 0x00);
-        }
+        let luns: Vec<u64> = match cdb[2] {
+            // 0x00: 접근 가능한 logical unit, 0x02: 전체. 이 Target에서는 둘이 같다.
+            0x00 | 0x02 => self.luns.keys().copied().filter_map(encode_lun).collect(),
+            // 0x01: well known logical unit만. 이 Target에는 없다.
+            0x01 => Vec::new(),
+            _ => return check_condition(SENSE_ILLEGAL_REQUEST, 0x24, 0x00),
+        };
         let allocation = be_u32(cdb, 6) as usize;
-        let list_length = self.luns.len().saturating_mul(8);
-        let mut output = vec![0; 8 + list_length];
-        output[..4].copy_from_slice(&(list_length as u32).to_be_bytes());
-        for (slot, lun) in output[8..]
-            .as_chunks_mut::<8>()
-            .0
-            .iter_mut()
-            .zip(self.luns.keys())
-        {
-            *slot = lun.to_be_bytes();
+        let list_length = luns.len().saturating_mul(8);
+        let mut output = Vec::with_capacity(8 + list_length);
+        output.extend_from_slice(&(list_length as u32).to_be_bytes());
+        output.extend_from_slice(&[0; 4]);
+        for lun in luns {
+            output.extend_from_slice(&lun.to_be_bytes());
         }
         output.truncate(output.len().min(allocation));
         ScsiExecution::good(output)
     }
 }
 
+/// 이 Target에 없는 logical unit으로 온 명령을 처리한다.
+///
+/// INQUIRY와 REQUEST SENSE는 logical unit이 없어도 GOOD으로 답해야 Initiator가 LUN 탐색을
+/// 이어 갈 수 있다. 예를 들어 LUN 0을 설정하지 않은 Target에서 Initiator는 LUN 0에
+/// INQUIRY를 먼저 보낸다.
+fn execute_unsupported_lun(cdb: &[u8; 16]) -> ScsiExecution {
+    match cdb[0] {
+        // SPC-4 §6.4.2: peripheral qualifier 011b, device type 1Fh로 "지원할 수 없는
+        // logical unit"임을 standard INQUIRY data에 담아 돌려준다.
+        0x12 if cdb[1] & 1 == 0 && cdb[2] == 0 => {
+            let mut output = standard_inquiry_data(0x7f);
+            output.truncate(be_u16(cdb, 3) as usize);
+            ScsiExecution::good(output)
+        }
+        // SPC-4 §6.39: sense data를 parameter data로 돌려주고 status는 GOOD이다.
+        0x03 => {
+            let mut sense = fixed_sense(SENSE_ILLEGAL_REQUEST, 0x25, 0x00).to_vec();
+            sense.truncate(cdb[4] as usize);
+            ScsiExecution::good(sense)
+        }
+        _ => check_condition(SENSE_ILLEGAL_REQUEST, 0x25, 0x00),
+    }
+}
+
+/// logical unit 하나의 장치 식별자.
+///
+/// Target의 identity namespace와 LUN 번호의 FNV-1a 64-bit hash이다. 같은 Target의 서로
+/// 다른 LUN은 항상 다른 값을 갖고, namespace가 다른 Target끼리는 사실상 겹치지 않는다.
+/// Initiator는 이 값으로 disk를 구분하므로, 여러 LUN이 같은 값을 내면 한 disk의 중복
+/// 경로로 오인될 수 있다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DeviceIdentity(u64);
+
+impl DeviceIdentity {
+    fn new(namespace: &[u8], lun: u64) -> Self {
+        const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+        // namespace와 LUN 번호 사이의 0은 둘의 경계를 고정한다.
+        let hash = namespace
+            .iter()
+            .copied()
+            .chain([0])
+            .chain(lun.to_be_bytes())
+            .fold(OFFSET_BASIS, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(PRIME)
+            });
+        Self(hash)
+    }
+
+    /// VPD 0x80의 product serial number. 16자리 대문자 hexadecimal이다.
+    fn serial_number(self) -> [u8; 16] {
+        const DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+        let mut serial = [0; 16];
+        for (index, digit) in serial.iter_mut().enumerate() {
+            *digit = DIGITS[((self.0 >> (60 - 4 * index)) & 0xf) as usize];
+        }
+        serial
+    }
+
+    /// NAA Locally Assigned designator (SPC-4 §7.8.6.6.5). 첫 nibble이 3h이고 나머지
+    /// 60 bit가 이 Target이 정한 값이다. IEEE company ID가 없으므로 이 형식을 쓴다.
+    fn naa_locally_assigned(self) -> [u8; 8] {
+        ((self.0 & 0x0fff_ffff_ffff_ffff) | 0x3000_0000_0000_0000).to_be_bytes()
+    }
+}
+
 fn execute_lun(
     device: &mut Lun,
+    identity: DeviceIdentity,
     cdb: &[u8; 16],
     data_out: &[u8],
     max_transfer_length: usize,
@@ -582,7 +725,7 @@ fn execute_lun(
     match cdb[0] {
         0x00 => ScsiExecution::good(Vec::new()),
         0x03 => request_sense(device, cdb),
-        0x12 => inquiry(cdb),
+        0x12 => inquiry(cdb, identity),
         0x1a => mode_sense(device, cdb, false),
         0x25 => read_capacity_10(device),
         0x28 => read_blocks(
@@ -638,22 +781,31 @@ fn request_sense(device: &mut Lun, cdb: &[u8; 16]) -> ScsiExecution {
     ScsiExecution::good(sense)
 }
 
-fn inquiry(cdb: &[u8; 16]) -> ScsiExecution {
+const INQUIRY_VENDOR: &[u8; 8] = b"RUSTISCS";
+
+/// standard INQUIRY data (SPC-4 §6.4.2). `peripheral`은 byte 0의 peripheral qualifier와
+/// device type이다.
+fn standard_inquiry_data(peripheral: u8) -> Vec<u8> {
+    let mut value = vec![0; 36];
+    value[0] = peripheral;
+    value[2] = 0x06;
+    value[3] = 0x02;
+    value[4] = 31;
+    value[7] = 0x02;
+    value[8..16].copy_from_slice(INQUIRY_VENDOR);
+    value[16..32].copy_from_slice(b"VIRTUAL DISK    ");
+    value[32..36].copy_from_slice(b"0001");
+    value
+}
+
+fn inquiry(cdb: &[u8; 16], identity: DeviceIdentity) -> ScsiExecution {
     let evpd = cdb[1] & 1 != 0;
     let page = cdb[2];
     let allocation = be_u16(cdb, 3) as usize;
     let mut output = if !evpd && page == 0 {
-        let mut value = vec![0; 36];
-        value[2] = 0x06;
-        value[3] = 0x02;
-        value[4] = 31;
-        value[7] = 0x02;
-        value[8..16].copy_from_slice(b"RUSTISCS");
-        value[16..32].copy_from_slice(b"VIRTUAL DISK    ");
-        value[32..36].copy_from_slice(b"0001");
-        value
+        standard_inquiry_data(0x00)
     } else if evpd {
-        let Some(value) = inquiry_vpd(page) else {
+        let Some(value) = inquiry_vpd(page, identity) else {
             return check_condition(SENSE_ILLEGAL_REQUEST, 0x24, 0x00);
         };
         value
@@ -664,15 +816,28 @@ fn inquiry(cdb: &[u8; 16]) -> ScsiExecution {
     ScsiExecution::good(output)
 }
 
-fn inquiry_vpd(page: u8) -> Option<Vec<u8>> {
+fn inquiry_vpd(page: u8, identity: DeviceIdentity) -> Option<Vec<u8>> {
     let payload: Vec<u8> = match page {
         0x00 => vec![0x00, 0x80, 0x83],
-        0x80 => b"RUSTISCSI0000001".to_vec(),
+        0x80 => identity.serial_number().to_vec(),
+        // Device Identification (SPC-4 §7.8.6). 두 designator 모두 logical unit에 대한
+        // 것이다 (association 00b).
         0x83 => {
-            let identifier = b"iqn.2024-01.rs.iscsi:lun";
-            let mut descriptor = vec![0x02, 0x08, 0x00, identifier.len() as u8];
-            descriptor.extend_from_slice(identifier);
-            descriptor
+            // NAA designator: code set 1h(binary), designator type 3h.
+            let mut descriptors = vec![0x01, 0x03, 0x00, 8];
+            descriptors.extend_from_slice(&identity.naa_locally_assigned());
+            // T10 vendor ID designator: code set 2h(ASCII), designator type 1h.
+            // vendor ID 8 byte 뒤에 vendor가 정한 식별자가 온다.
+            let serial = identity.serial_number();
+            descriptors.extend_from_slice(&[
+                0x02,
+                0x01,
+                0x00,
+                (INQUIRY_VENDOR.len() + serial.len()) as u8,
+            ]);
+            descriptors.extend_from_slice(INQUIRY_VENDOR);
+            descriptors.extend_from_slice(&serial);
+            descriptors
         }
         _ => return None,
     };
@@ -805,10 +970,19 @@ fn storage_error(error: StorageError) -> ScsiExecution {
 // 로그에는 LUN, opcode, 대상 LBA 또는 page code, sense와 backend 오류 요약만 남긴다.
 // data payload는 어떤 레벨에서도 기록하지 않는다.
 
+/// 로그에 쓸 LUN 표기. LUN 번호로 풀리면 그 번호, 아니면 8-byte 값 그대로이다.
+#[cfg(feature = "tracing")]
+fn lun_label(wire: u64) -> String {
+    match decode_lun(wire) {
+        Some(number) => number.to_string(),
+        None => format!("{wire:#018x}"),
+    }
+}
+
 fn log_command(lun: u64, cdb: &[u8; 16], result: &ScsiExecution) {
     #[cfg(feature = "tracing")]
     tracing::trace!(
-        lun,
+        lun = lun_label(lun),
         opcode = format_args!("{:#04x}", cdb[0]),
         lba = cdb_lba(cdb),
         page = cdb_page_code(cdb).map(|page| format!("{page:#04x}")),
@@ -826,7 +1000,7 @@ fn log_check_condition(lun: u64, cdb: &[u8; 16], sense: &[u8]) {
     #[cfg(feature = "tracing")]
     if sense.get(2).copied().unwrap_or(0) & 0x0f == SENSE_DATA_PROTECT {
         tracing::warn!(
-            lun,
+            lun = lun_label(lun),
             opcode = format_args!("{:#04x}", cdb[0]),
             lba = cdb_lba(cdb),
             "read-only LUN에 대한 write 요청을 거부했다"
@@ -835,7 +1009,7 @@ fn log_check_condition(lun: u64, cdb: &[u8; 16], sense: &[u8]) {
     }
     #[cfg(feature = "tracing")]
     tracing::debug!(
-        lun,
+        lun = lun_label(lun),
         opcode = format_args!("{:#04x}", cdb[0]),
         lba = cdb_lba(cdb),
         page = cdb_page_code(cdb).map(|page| format!("{page:#04x}")),
@@ -927,7 +1101,9 @@ mod tests {
 
     fn target() -> ScsiTarget {
         let mut target = ScsiTarget::default();
-        target.add_lun(0, MemoryBackend::new(512, 32).unwrap());
+        target
+            .add_lun(0, MemoryBackend::new(512, 32).unwrap())
+            .unwrap();
         target
     }
 
@@ -1036,12 +1212,279 @@ mod tests {
 
         let mut backend = MemoryBackend::new(512, 1).unwrap();
         backend.set_read_only(true);
-        target.add_lun(1, backend);
+        target.add_lun(1, backend).unwrap();
         let mut write = [0; 16];
         write[0] = 0x2a;
         write[8] = 1;
-        let result = target.execute(1, &write, &[0; 512]);
+        let result = target.execute(wire_lun(1), &write, &[0; 512]);
         assert_eq!((result.sense[2], result.sense[12]), (7, 0x27));
+    }
+
+    fn wire_lun(number: u64) -> u64 {
+        encode_lun(number).unwrap()
+    }
+
+    fn command(opcode: u8) -> [u8; 16] {
+        let mut cdb = [0; 16];
+        cdb[0] = opcode;
+        cdb
+    }
+
+    #[test]
+    fn lun_numbers_use_sam_single_level_wire_encoding() {
+        // SAM-5 §4.7.7.2: peripheral device addressing, bus identifier 0.
+        assert_eq!(encode_lun(0), Some(0));
+        assert_eq!(encode_lun(1), Some(0x0001_0000_0000_0000));
+        assert_eq!(encode_lun(255), Some(0x00ff_0000_0000_0000));
+        // SAM-5 §4.7.7.3: flat space addressing, method 01b와 14-bit LUN.
+        assert_eq!(encode_lun(256), Some(0x4100_0000_0000_0000));
+        assert_eq!(encode_lun(300), Some(0x412c_0000_0000_0000));
+        assert_eq!(encode_lun(MAX_LUN), Some(0x7fff_0000_0000_0000));
+        assert_eq!(encode_lun(MAX_LUN + 1), None);
+        assert_eq!(encode_lun(u64::MAX), None);
+
+        for number in [0, 1, 2, 255, 256, 300, MAX_LUN] {
+            assert_eq!(decode_lun(wire_lun(number)), Some(number));
+        }
+        // flat space addressing은 작은 번호에도 쓸 수 있다.
+        assert_eq!(decode_lun(0x4005_0000_0000_0000), Some(5));
+    }
+
+    #[test]
+    fn wire_values_outside_the_supported_addressing_are_not_luns() {
+        // LUN 번호를 인코딩하지 않고 그대로 넣은 값. 둘째 level 이하가 0이 아니다.
+        assert_eq!(decode_lun(1), None);
+        assert_eq!(decode_lun(0x0001_0000_0000_0001), None);
+        assert_eq!(decode_lun(0x0001_0001_0000_0000), None);
+        // peripheral device addressing의 bus identifier가 0이 아니다.
+        assert_eq!(decode_lun(0x0100_0000_0000_0000), None);
+        assert_eq!(decode_lun(0x3f05_0000_0000_0000), None);
+        // logical unit addressing(10b)과 extended addressing(11b, well known LUN 포함).
+        assert_eq!(decode_lun(0x8001_0000_0000_0000), None);
+        assert_eq!(decode_lun(0xc101_0000_0000_0000), None);
+        assert_eq!(decode_lun(u64::MAX), None);
+    }
+
+    #[test]
+    fn lun_numbers_beyond_the_encodable_range_are_rejected() {
+        let mut target = ScsiTarget::default();
+        assert!(target
+            .add_lun(MAX_LUN, MemoryBackend::new(512, 1).unwrap())
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            target
+                .add_lun(MAX_LUN + 1, MemoryBackend::new(512, 1).unwrap())
+                .err(),
+            Some(InvalidLun(MAX_LUN + 1))
+        );
+        assert_eq!(target.lun_info().len(), 1);
+
+        let shared = SharedScsiTarget::default();
+        assert_eq!(
+            shared.add_lun(MAX_LUN + 1, MemoryBackend::new(512, 1).unwrap()),
+            Err(SharedScsiTargetError::InvalidLun(InvalidLun(MAX_LUN + 1)))
+        );
+        assert!(shared.lun_info().unwrap().is_empty());
+    }
+
+    fn multi_lun_target() -> ScsiTarget {
+        let mut target = ScsiTarget::default();
+        target.set_identity_namespace("iqn.2026-10.local.test:disk");
+        for (lun, blocks) in [(300, 4), (0, 1), (2, 3)] {
+            target
+                .add_lun(lun, MemoryBackend::new(512, blocks).unwrap())
+                .unwrap();
+        }
+        target
+    }
+
+    #[test]
+    fn report_luns_lists_wire_encoded_luns_in_ascending_order() {
+        let mut target = multi_lun_target();
+        let mut report = command(0xa0);
+        report[6..10].copy_from_slice(&64u32.to_be_bytes());
+        let expected: &[u8] = &[
+            0, 0, 0, 24, 0, 0, 0, 0, // LUN list length, reserved
+            0x00, 0x00, 0, 0, 0, 0, 0, 0, // LUN 0
+            0x00, 0x02, 0, 0, 0, 0, 0, 0, // LUN 2
+            0x41, 0x2c, 0, 0, 0, 0, 0, 0, // LUN 300
+        ];
+        // 어느 LUN으로 보내도, 없는 LUN으로 보내도 같은 목록이다.
+        for lun in [0, wire_lun(2), wire_lun(9), 0xc101_0000_0000_0000] {
+            let result = target.execute(lun, &report, &[]);
+            assert_eq!(result.status, STATUS_GOOD);
+            assert_eq!(result.data.as_ref(), expected);
+        }
+
+        // SELECT REPORT 02h도 같은 목록이고 01h(well known LUN)는 빈 목록이다.
+        report[2] = 0x02;
+        assert_eq!(target.execute(0, &report, &[]).data.as_ref(), expected);
+        report[2] = 0x01;
+        assert_eq!(
+            target.execute(0, &report, &[]).data.as_ref(),
+            &[0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        report[2] = 0x03;
+        let result = target.execute(0, &report, &[]);
+        assert_eq!((result.status, result.sense[12]), (2, 0x24));
+
+        // allocation length가 작으면 잘라 보내되 LUN list length는 전체 길이를 알린다.
+        report[2] = 0x00;
+        report[6..10].copy_from_slice(&16u32.to_be_bytes());
+        assert_eq!(
+            target.execute(0, &report, &[]).data.as_ref(),
+            &expected[..16]
+        );
+    }
+
+    #[test]
+    fn commands_reach_the_logical_unit_named_by_the_wire_lun() {
+        let mut target = multi_lun_target();
+        let capacity = command(0x25);
+        for (number, last_lba) in [(0, 0), (2, 2), (300, 3)] {
+            assert_eq!(
+                target
+                    .execute(wire_lun(number), &capacity, &[])
+                    .data
+                    .as_ref(),
+                &[0, 0, 0, last_lba, 0, 0, 2, 0],
+                "LUN {number}"
+            );
+        }
+
+        // 한 LUN에 쓴 data는 그 LUN에서만 읽힌다.
+        let mut write = command(0x2a);
+        write[8] = 1;
+        assert_eq!(
+            target.execute(wire_lun(2), &write, &[0x5a; 512]).status,
+            STATUS_GOOD
+        );
+        let mut read = command(0x28);
+        read[8] = 1;
+        assert_eq!(
+            target.execute(wire_lun(2), &read, &[]).data.as_ref(),
+            &[0x5a; 512]
+        );
+        assert_eq!(target.execute(0, &read, &[]).data.as_ref(), &[0; 512]);
+
+        // 인코딩하지 않은 번호와 설정하지 않은 LUN은 logical unit이 아니다.
+        for lun in [2, wire_lun(1), wire_lun(299)] {
+            let result = target.execute(lun, &capacity, &[]);
+            assert_eq!(
+                (result.status, result.sense[2], result.sense[12]),
+                (2, 5, 0x25),
+                "wire LUN {lun:#018x}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_lun_answers_inquiry_and_request_sense_with_good_status() {
+        // LUN 0이 없는 Target: Initiator는 그래도 LUN 0부터 탐색한다.
+        let mut target = ScsiTarget::default();
+        target
+            .add_lun(2, MemoryBackend::new(512, 1).unwrap())
+            .unwrap();
+
+        let mut inquiry = command(0x12);
+        inquiry[4] = 96;
+        let result = target.execute(0, &inquiry, &[]);
+        assert_eq!(result.status, STATUS_GOOD);
+        assert_eq!(result.data.len(), 36);
+        // peripheral qualifier 011b, device type 1Fh.
+        assert_eq!(result.data[0], 0x7f);
+        assert_eq!(result.data[4], 31);
+        assert_eq!(&result.data[8..16], b"RUSTISCS");
+        assert_eq!(target.execute(wire_lun(2), &inquiry, &[]).data[0], 0x00);
+
+        inquiry[4] = 5;
+        assert_eq!(
+            target.execute(0, &inquiry, &[]).data.as_ref(),
+            &[0x7f, 0, 6, 2, 31]
+        );
+
+        // VPD page는 logical unit이 있어야 답할 수 있다.
+        inquiry[1] = 1;
+        inquiry[2] = 0x83;
+        inquiry[4] = 96;
+        let result = target.execute(0, &inquiry, &[]);
+        assert_eq!(
+            (result.status, result.sense[2], result.sense[12]),
+            (2, 5, 0x25)
+        );
+
+        let mut request_sense = command(0x03);
+        request_sense[4] = 18;
+        let result = target.execute(0, &request_sense, &[]);
+        assert_eq!(result.status, STATUS_GOOD);
+        assert_eq!(
+            (
+                result.data[0],
+                result.data[2],
+                result.data[12],
+                result.data[13]
+            ),
+            (0x70, 5, 0x25, 0x00)
+        );
+
+        let result = target.execute(0, &command(0x00), &[]);
+        assert_eq!(
+            (result.status, result.sense[2], result.sense[12]),
+            (2, 5, 0x25)
+        );
+    }
+
+    #[test]
+    fn each_logical_unit_reports_its_own_device_identity() {
+        // 기대값은 Python으로 따로 계산한 FNV-1a 64(namespace, 0x00, LUN 번호 8 byte)이다.
+        let mut target = multi_lun_target();
+        let mut serial = command(0x12);
+        serial[1] = 1;
+        serial[2] = 0x80;
+        serial[4] = 96;
+        let expected = [
+            (0, &b"0CCD5F7D53575CE3"[..]),
+            (2, b"0CCD617D53576049"),
+            (300, b"0CCA0D7D53549BB6"),
+        ];
+        for (number, expected) in expected {
+            let result = target.execute(wire_lun(number), &serial, &[]);
+            assert_eq!(result.status, STATUS_GOOD);
+            assert_eq!(&result.data[..4], &[0, 0x80, 0, 16]);
+            assert_eq!(&result.data[4..], expected, "LUN {number}");
+        }
+
+        let mut identification = command(0x12);
+        identification[1] = 1;
+        identification[2] = 0x83;
+        identification[4] = 96;
+        let mut page = vec![0, 0x83, 0, 40];
+        // NAA Locally Assigned: 첫 nibble 3h와 hash의 하위 60 bit.
+        page.extend([0x01, 0x03, 0x00, 8]);
+        page.extend([0x3c, 0xcd, 0x5f, 0x7d, 0x53, 0x57, 0x5c, 0xe3]);
+        // T10 vendor ID: vendor 8 byte와 serial number.
+        page.extend([0x02, 0x01, 0x00, 24]);
+        page.extend(b"RUSTISCS0CCD5F7D53575CE3");
+        assert_eq!(
+            target.execute(0, &identification, &[]).data.as_ref(),
+            page.as_slice()
+        );
+        let other = target.execute(wire_lun(2), &identification, &[]);
+        assert_eq!(
+            &other.data[8..16],
+            &[0x3c, 0xcd, 0x61, 0x7d, 0x53, 0x57, 0x60, 0x49]
+        );
+
+        // namespace가 다른 Target의 같은 LUN 번호는 다른 장치이다.
+        let mut unnamed = ScsiTarget::default();
+        unnamed
+            .add_lun(0, MemoryBackend::new(512, 1).unwrap())
+            .unwrap();
+        assert_eq!(
+            &unnamed.execute(0, &serial, &[]).data[4..],
+            b"E604823A249029BF"
+        );
     }
 
     #[test]
@@ -1083,7 +1526,9 @@ mod tests {
         }
         {
             let mut target = ScsiTarget::default();
-            target.add_lun(0, FileBackend::open_read_write(&path, 512).unwrap());
+            target
+                .add_lun(0, FileBackend::open_read_write(&path, 512).unwrap())
+                .unwrap();
             let mut capacity = [0; 16];
             capacity[0] = 0x25;
             assert_eq!(
@@ -1113,7 +1558,9 @@ mod tests {
         let path = temp_image_path("ro");
         FileBackend::create_fixed(&path, 512, 1).unwrap();
         let mut target = ScsiTarget::default();
-        target.add_lun(0, FileBackend::open_read_only(&path, 512).unwrap());
+        target
+            .add_lun(0, FileBackend::open_read_only(&path, 512).unwrap())
+            .unwrap();
         let mut write = [0; 16];
         write[0] = 0x2a;
         write[8] = 1;

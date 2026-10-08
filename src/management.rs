@@ -50,8 +50,12 @@ impl TargetServiceApi {
         }
 
         let mut target = ScsiTarget::default();
+        // 장치 식별자가 Target마다 달라지도록 iSCSI name을 namespace로 쓴다.
+        target.set_identity_namespace(config.name().as_str());
         for lun in config.luns() {
-            target.add_boxed_lun(lun.lun(), build_backend(lun.backend())?);
+            target
+                .add_boxed_lun(lun.lun(), build_backend(lun.backend())?)
+                .map_err(SharedScsiTargetError::from)?;
         }
         let managed = ManagedTarget {
             config,
@@ -449,6 +453,119 @@ mod tests {
         };
         assert_eq!(response.status, 0x02);
         assert_eq!((response.sense[2], response.sense[12]), (0x05, 0x25));
+    }
+
+    fn data_in(
+        connection: &mut ConnectionStateMachine,
+        lun: u64,
+        cdb: [u8; 16],
+        cmd_sn: u32,
+    ) -> Bytes {
+        let exp_stat_sn = connection.sequence().unwrap().next_stat_sn();
+        let output = connection
+            .receive(Pdu::ScsiCommand(ScsiCommand {
+                immediate: false,
+                final_: true,
+                read: true,
+                write: false,
+                attr: TaskAttribute::Simple,
+                lun,
+                initiator_task_tag: cmd_sn,
+                expected_data_transfer_length: 64,
+                cmd_sn,
+                exp_stat_sn,
+                cdb,
+                immediate_data: Bytes::new(),
+            }))
+            .unwrap();
+        let Some(Pdu::ScsiDataIn(response)) = output.response else {
+            panic!("expected Data-In for opcode {:#04x}", cdb[0]);
+        };
+        assert_eq!(response.status, 0);
+        response.data
+    }
+
+    #[test]
+    fn initiator_discovers_and_addresses_every_configured_lun() {
+        let api = TargetServiceApi::new();
+        let name = target_name("multi-lun");
+        let mut config = TargetConfig::new(name.clone());
+        config.add_lun(memory_lun(0, 2, false)).unwrap();
+        config.add_lun(memory_lun(3, 5, false)).unwrap();
+        api.add_target(config).unwrap();
+
+        let mut connection = api.create_connection(&name, 0x1234, 8).unwrap();
+        establish(&mut connection, &name);
+
+        // Initiator는 LUN 0에 REPORT LUNS를 보내 목록을 얻는다.
+        let mut report_luns = [0; 16];
+        report_luns[0] = 0xa0;
+        report_luns[9] = 64;
+        let list = data_in(&mut connection, 0, report_luns, 11);
+        assert_eq!(
+            list.as_ref(),
+            &[
+                0, 0, 0, 16, 0, 0, 0, 0, // LUN list length, reserved
+                0, 0, 0, 0, 0, 0, 0, 0, // LUN 0
+                0, 3, 0, 0, 0, 0, 0, 0, // LUN 3
+            ]
+        );
+
+        // 그리고 목록의 8 byte를 그대로 BHS의 LUN field에 넣어 명령을 보낸다.
+        let second = u64::from_be_bytes(list[16..24].try_into().unwrap());
+        let mut read_capacity = [0; 16];
+        read_capacity[0] = 0x25;
+        assert_eq!(
+            data_in(&mut connection, 0, read_capacity, 12).as_ref(),
+            &[0, 0, 0, 1, 0, 0, 2, 0]
+        );
+        assert_eq!(
+            data_in(&mut connection, second, read_capacity, 13).as_ref(),
+            &[0, 0, 0, 4, 0, 0, 2, 0]
+        );
+
+        // 두 disk는 서로 다른 serial number를 낸다. 기대값은 Target 이름과 LUN 번호의
+        // FNV-1a 64를 Python으로 따로 계산한 것이다.
+        let mut serial = [0; 16];
+        serial[0] = 0x12;
+        serial[1] = 1;
+        serial[2] = 0x80;
+        serial[4] = 64;
+        assert_eq!(
+            &data_in(&mut connection, 0, serial, 14)[4..],
+            b"A94680ED629A9D39"
+        );
+        assert_eq!(
+            &data_in(&mut connection, second, serial, 15)[4..],
+            b"A9467DED629A9820"
+        );
+    }
+
+    #[test]
+    fn same_lun_number_on_another_target_is_a_different_device() {
+        let api = TargetServiceApi::new();
+        let name = target_name("other");
+        let mut config = TargetConfig::new(name.clone());
+        config.add_lun(memory_lun(0, 2, false)).unwrap();
+        api.add_target(config).unwrap();
+        // runtime에 추가한 LUN도 같은 Target의 namespace를 쓴다.
+        api.add_lun(&name, memory_lun(3, 2, false)).unwrap();
+
+        let mut connection = api.create_connection(&name, 0x1234, 8).unwrap();
+        establish(&mut connection, &name);
+        let mut serial = [0; 16];
+        serial[0] = 0x12;
+        serial[1] = 1;
+        serial[2] = 0x80;
+        serial[4] = 64;
+        assert_eq!(
+            &data_in(&mut connection, 0, serial, 11)[4..],
+            b"981B446759766E9A"
+        );
+        assert_eq!(
+            &data_in(&mut connection, 0x0003_0000_0000_0000, serial, 12)[4..],
+            b"981B436759766CE7"
+        );
     }
 
     #[test]

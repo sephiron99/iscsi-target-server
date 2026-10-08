@@ -113,6 +113,7 @@
 - [x] unsupported/invalid CDB의 CHECK CONDITION과 sense data 생성
 - [x] SCSI status, sense, underflow/overflow와 residual count 검증
 - [x] Data 전송 경로를 통한 Initiator block read/write/flush 통합 검증
+- [x] 한 Target의 여러 LUN 지원: SAM-5 single level LUN 인코딩(`REPORT LUNS`와 BHS LUN field, LUN 번호 0~16383), 없는 LUN에 대한 `INQUIRY`(peripheral qualifier 011b)와 `REQUEST SENSE` 응답, Target 이름과 LUN 번호에서 만든 LUN별 장치 식별자(VPD 0x80/0x83). Windows Initiator에서 LUN 0(USB)과 LUN 1(memory)이 서로 다른 disk로 인식되는 것을 실기기 확인
 
 완료 조건:
 

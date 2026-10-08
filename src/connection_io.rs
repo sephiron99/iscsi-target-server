@@ -555,7 +555,7 @@ mod tests {
         connection.response_sent().unwrap();
         let exp_stat_sn = connection.sequence().unwrap().next_stat_sn();
         let mut target = ScsiTarget::default();
-        target.add_lun(0, backend);
+        target.add_lun(0, backend).unwrap();
         connection.set_scsi_target(target);
         let mut cdb = [0; 16];
         cdb[0] = 0x28;
