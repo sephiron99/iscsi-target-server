@@ -218,6 +218,11 @@ impl StorageBackend for WindowsStorageBackend {
     }
 
     fn flush(&mut self) -> Result<(), StorageError> {
+        // read-only backend에는 내보낼 data가 없다. Windows의 FlushFileBuffers는 write
+        // 접근이 없는 handle에서 ERROR_ACCESS_DENIED로 실패하므로 호출하지 않는다.
+        if self.read_only {
+            return Ok(());
+        }
         self.file
             .flush()
             .map_err(|error| storage_io_error(StorageIoOperation::Flush, error))?;

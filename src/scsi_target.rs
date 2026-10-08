@@ -262,6 +262,11 @@ impl StorageBackend for FileBackend {
     }
 
     fn flush(&mut self) -> Result<(), StorageError> {
+        // read-only backend에는 내보낼 data가 없다. Windows의 FlushFileBuffers는 write
+        // 접근이 없는 handle에서 ERROR_ACCESS_DENIED로 실패하므로 호출하지 않는다.
+        if self.read_only {
+            return Ok(());
+        }
         self.file
             .flush()
             .map_err(|error| storage_io_error(StorageIoOperation::Flush, error))?;
@@ -1029,6 +1034,15 @@ mod tests {
         write[8] = 1;
         let result = target.execute(0, &write, &[0; 512]);
         assert_eq!((result.sense[2], result.sense[12]), (7, 0x27));
+
+        // Windows의 FlushFileBuffers는 write 접근이 없는 handle에서 거부된다. read-only
+        // LUN의 SYNCHRONIZE CACHE는 내보낼 data가 없으므로 backend를 건드리지 않고 성공한다.
+        for opcode in [0x35, 0x91] {
+            let mut synchronize = [0; 16];
+            synchronize[0] = opcode;
+            assert_eq!(target.execute(0, &synchronize, &[]).status, STATUS_GOOD);
+        }
+        drop(target);
         fs::remove_file(path).unwrap();
     }
 
