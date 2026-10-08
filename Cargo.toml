@@ -3,6 +3,7 @@ name = "pdu"
 version = "0.1.0"
 edition = "2021"
 description = "iSCSI PDU 파싱/직렬화 (RFC 7143)"
+license = "GPL-3.0-or-later"
 
 [dependencies]
 base64 = "0.22"
