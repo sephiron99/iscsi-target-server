@@ -99,7 +99,7 @@ Block Limits, Block Device Characteristics 제공.
   `VirtualSCSITarget.ExecuteCommand`는 "not thread-safe" 명시).
   이 프로젝트는 tokio task + service 전역 bounded blocking pool.
 - 테스트: 원본은 자동 테스트 전무. 이 프로젝트는 113개 (wire fixture, malformed 입력, 실 TCP 왕복 포함).
-- 라이선스: 원본 LGPL-3.0 — 직접 번역 부분은 출처/revision 기록 의무 (AGENTS.md 참고).
+- 라이선스: 원본 LGPL-3.0, 이 프로젝트 GPL-3.0-or-later. 원본은 참고 자료일 뿐이고 이 프로젝트에 원본의 코드는 들어 있지 않다.
 
 ## 이 비교에서 나온 plan.md 반영 후보
 

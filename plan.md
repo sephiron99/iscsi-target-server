@@ -285,7 +285,7 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 - [ ] 지원하는 Login key, PDU, SCSI command와 backend 표
 - [ ] 아키텍처와 상태 머신 문서
 - [ ] 보안 모델, 제한값과 운영 권장사항
-- [ ] 원본 iSCSIConsole 직접 번역 부분의 출처/revision 기록
+- [x] 원본 iSCSIConsole과의 관계 기록: 참고 자료일 뿐 가져오거나 번역한 코드가 없음을 `README.md`와 `AGENTS.md`에 명시
 - [ ] 전체 dependency와 라이선스 감사
 - [ ] Windows 실행 파일 packaging 방식 결정
 - [ ] release build와 재현 가능한 테스트 절차 정리
@@ -304,7 +304,7 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 - [ ] 선택적 Tokio adapter feature 분리
 - [ ] public API, semantic versioning과 MSRV 결정
 - [ ] 독립 fixture, malformed-input test와 crate 문서 완성
-- [ ] package 이름, repository metadata와 Rust 크레이트 라이선스 결정
+- [ ] package 이름과 repository metadata 결정 (라이선스는 GPL-3.0-or-later로 결정됨, `LICENSE`와 `Cargo.toml`에 반영)
 - [ ] 로컬 package 검증과 dry-run
 - [ ] 사용자의 명시적 승인 후 마지막 작업으로 publish
 
@@ -323,7 +323,7 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 완료 조건:
 
 - 조사로 정한 지원 범위의 가상 디스크 image를 LUN으로 serve할 수 있다.
-- 추가한 의존성과 직접 번역 부분의 라이선스와 출처가 기록되어 있다.
+- 추가한 의존성의 라이선스와 출처가 기록되어 있다.
 
 ## 공통 검증 명령
 
