@@ -263,6 +263,16 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 - partition 자체는 정상이고 디스크 관리에는 모두 보인다. 필요하면 디스크 관리에서 문자를 직접 지정한다. 지정은 Windows 레지스트리에 저장되고 disk에는 쓰지 않으며, 가상 GUID 기준으로 기억되어 다음 연결부터 유지된다.
 - 같은 이유로 USB를 직접 꽂았을 때와 iSCSI로 연결했을 때 드라이브 문자가 서로 다를 수 있고, 한쪽에서 바꾼 문자는 다른 쪽에 반영되지 않는다.
 
+### Windows Initiator가 로그아웃을 거부할 때
+
+"세션의 장치가 현재 사용중이므로 세션을 로그아웃할 수 없습니다"는 Windows Initiator가 Target에 Logout을 보내기 전에 스스로 내는 메시지이다. Target의 오류가 아니며, 11단계의 사용 문서에 옮겨 적는다.
+
+- 구분: daemon 로그에서 `connection accepted` 직후 1초 안에 같은 peer로 `NormalLogout`이 찍히는 연결은 discovery용이다. 실제 session의 Logout은 오래 유지된 peer의 `NormalLogout`으로 나타난다.
+- volume이 사용 중인 경우: iSCSI disk의 드라이브를 연 탐색기 창과 프로그램을 닫는다. 그래도 거부되면 `Set-Disk -Number <번호> -IsOffline $true`로 disk를 내린 뒤 끊는다.
+- disk가 offline인데도 거부되는 경우: disk 장치 자체를 연 프로세스가 있다. 디스크 관리와 `diskpart` 창을 닫고 `Stop-Service vds`, `Stop-Service smphost` 후 곧바로 `Disconnect-IscsiTarget -NodeAddress <IQN>`을 실행한다. 사이에 `Get-Disk`를 실행하면 서비스가 다시 disk를 잡는다. 이 원인은 daemon 로그의 `MODE SENSE` page 0x3f/`READ CAPACITY` 조회에서 추론한 것이며 어느 프로세스인지 직접 확인하지는 않았다.
+- 마지막 수단: disk를 offline으로 내린 뒤에는 남은 write가 없으므로 daemon을 Ctrl+C로 종료해도 된다. volume이 mount된 상태에서 daemon을 먼저 종료하면 read-write LUN의 data가 손상될 수 있다.
+- 즐겨찾는 대상(`IsPersistent = True`)으로 등록된 Target은 daemon을 띄울 때마다 Windows가 자동으로 다시 연결한다. backend를 바꿔 가며 시험할 때는 즐겨찾기에서 지운다.
+
 완료 조건:
 
 - Linux와 Windows Initiator에서 반복 가능한 end-to-end 테스트가 성공한다.
