@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{watch, Semaphore};
-use tokio::time::{timeout, Instant};
+use tokio::sync::{Semaphore, watch};
+use tokio::time::{Instant, timeout};
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::codec::IscsiCodec;
@@ -16,7 +16,7 @@ use crate::connection::{
 };
 use crate::error::CodecError;
 use crate::frame::FrameConfig;
-use crate::{Pdu, BHS_LEN};
+use crate::{BHS_LEN, Pdu};
 
 const READ_CHUNK_LENGTH: usize = 8192;
 
@@ -243,7 +243,7 @@ where
                 ConnectionPhase::Closed => {
                     return connection
                         .close_reason()
-                        .ok_or(ConnectionIoError::MissingCloseReason)
+                        .ok_or(ConnectionIoError::MissingCloseReason);
                 }
             }
         };
@@ -437,6 +437,7 @@ pub enum ConnectionIoError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Pdu;
     use crate::connection::ConnectionStateMachine;
     use crate::control::{LogoutRequest, LogoutResponse, NopOut};
     use crate::login::{IscsiName, LoginRequest, LoginResponse, TextParameters};
@@ -445,7 +446,6 @@ mod tests {
     use crate::scsi::ScsiCommand;
     use crate::scsi_target::{ScsiTarget, StorageBackend, StorageError};
     use crate::target_login::TargetLoginProcessor;
-    use crate::Pdu;
     use tokio::net::{TcpListener, TcpStream};
 
     use std::sync::{Arc, Condvar, Mutex};
@@ -683,9 +683,11 @@ mod tests {
         client.write_all(&wire).await.unwrap();
         started_rx.await.unwrap();
         shutdown.send(true).unwrap();
-        assert!(tokio::time::timeout(Duration::from_millis(50), &mut server)
-            .await
-            .is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut server)
+                .await
+                .is_err()
+        );
 
         release_gate(&gate);
         assert_eq!(

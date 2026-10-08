@@ -3,7 +3,7 @@
 //! Win32 handle과 `DeviceIoControl` 사용은 이 모듈 안에만 격리한다. 상위 계층은
 //! [`StorageBackend`]만 사용하며 장치 경로나 Win32 타입을 알 필요가 없다.
 
-use std::ffi::{c_void, OsString};
+use std::ffi::{OsString, c_void};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::mem::{offset_of, size_of};
@@ -15,21 +15,21 @@ use std::ptr::{null, null_mut};
 
 use windows_sys::Win32::Foundation::{ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-    FindFirstVolumeW, FindNextVolumeW, FindVolumeClose, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose,
     IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
 };
+use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::{
-    PropertyStandardQuery, StorageAccessAlignmentProperty, DISK_ATTRIBUTE_OFFLINE, DISK_EXTENT,
-    DISK_GEOMETRY, FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, GET_DISK_ATTRIBUTES,
-    GET_LENGTH_INFORMATION, IOCTL_DISK_GET_DISK_ATTRIBUTES, IOCTL_DISK_GET_DRIVE_GEOMETRY,
-    IOCTL_DISK_GET_LENGTH_INFO, IOCTL_DISK_SET_DISK_ATTRIBUTES, IOCTL_STORAGE_QUERY_PROPERTY,
-    SET_DISK_ATTRIBUTES, STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR, STORAGE_PROPERTY_QUERY,
+    DISK_ATTRIBUTE_OFFLINE, DISK_EXTENT, DISK_GEOMETRY, FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME,
+    GET_DISK_ATTRIBUTES, GET_LENGTH_INFORMATION, IOCTL_DISK_GET_DISK_ATTRIBUTES,
+    IOCTL_DISK_GET_DRIVE_GEOMETRY, IOCTL_DISK_GET_LENGTH_INFO, IOCTL_DISK_SET_DISK_ATTRIBUTES,
+    IOCTL_STORAGE_QUERY_PROPERTY, PropertyStandardQuery, SET_DISK_ATTRIBUTES,
+    STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR, STORAGE_PROPERTY_QUERY, StorageAccessAlignmentProperty,
     VOLUME_DISK_EXTENTS,
 };
-use windows_sys::Win32::System::IO::DeviceIoControl;
 
 use crate::scsi_target::{
-    block_io_offset, storage_io_error, StorageBackend, StorageError, StorageIoOperation,
+    StorageBackend, StorageError, StorageIoOperation, block_io_offset, storage_io_error,
 };
 
 /// raw device를 열 때 허용할 접근 방식.
@@ -246,10 +246,10 @@ fn query_device_length(file: &File) -> Result<u64, StorageError> {
 /// `ERROR_INVALID_FUNCTION` 등으로 실패하므로, 그 경우 모든 disk 장치가 지원하는
 /// `IOCTL_DISK_GET_DRIVE_GEOMETRY`의 `BytesPerSector`로 fallback한다.
 fn query_logical_sector_size(file: &File) -> Result<u32, StorageError> {
-    if let Ok(descriptor) = query_access_alignment(file) {
-        if descriptor.BytesPerLogicalSector != 0 {
-            return Ok(descriptor.BytesPerLogicalSector);
-        }
+    if let Ok(descriptor) = query_access_alignment(file)
+        && descriptor.BytesPerLogicalSector != 0
+    {
+        return Ok(descriptor.BytesPerLogicalSector);
     }
     let geometry: DISK_GEOMETRY = device_io_control_output(file, IOCTL_DISK_GET_DRIVE_GEOMETRY)?;
     if geometry.BytesPerSector == 0 {
@@ -513,10 +513,10 @@ fn mounted_volume_device_paths() -> Result<Vec<PathBuf>, StorageError> {
 fn volume_device_path(name: &[u16]) -> Option<PathBuf> {
     let length = name.iter().position(|&unit| unit == 0)?;
     let mut name = &name[..length];
-    if let [rest @ .., last] = name {
-        if *last == u16::from(b'\\') {
-            name = rest;
-        }
+    if let [rest @ .., last] = name
+        && *last == u16::from(b'\\')
+    {
+        name = rest;
     }
     if name.is_empty() {
         return None;

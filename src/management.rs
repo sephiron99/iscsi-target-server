@@ -324,11 +324,11 @@ mod tests {
     use super::*;
     use bytes::Bytes;
 
+    use crate::Pdu;
     use crate::config::ChapAuthenticationConfig;
     use crate::login::{LoginRequest, TextParameters};
     use crate::opcode::{LoginStage, TaskAttribute};
     use crate::scsi::ScsiCommand;
-    use crate::Pdu;
 
     const INITIATOR: &str = "iqn.2026-07.example.com:initiator";
 

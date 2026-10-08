@@ -1268,10 +1268,12 @@ mod tests {
     #[test]
     fn lun_numbers_beyond_the_encodable_range_are_rejected() {
         let mut target = ScsiTarget::default();
-        assert!(target
-            .add_lun(MAX_LUN, MemoryBackend::new(512, 1).unwrap())
-            .unwrap()
-            .is_none());
+        assert!(
+            target
+                .add_lun(MAX_LUN, MemoryBackend::new(512, 1).unwrap())
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             target
                 .add_lun(MAX_LUN + 1, MemoryBackend::new(512, 1).unwrap())

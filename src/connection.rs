@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use crate::Pdu;
 use crate::control_state::{DiscoveryTarget, FullFeatureDisposition, FullFeatureState};
 use crate::frame::FrameConfig;
 use crate::negotiation::NegotiatedFrameParameters;
@@ -9,7 +10,6 @@ use crate::opcode::LoginStage;
 use crate::scsi_target::{ScsiTarget, SharedScsiTarget};
 use crate::serial::{SequenceError, SequenceState};
 use crate::target_login::{TargetLoginError, TargetLoginProcessor};
-use crate::Pdu;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionPhase {
@@ -319,10 +319,10 @@ impl ConnectionStateMachine {
                     )?);
                     self.pending_frame_parameters = completed;
                     let mut targets = self.discovery_targets.clone();
-                    if targets.is_empty() {
-                        if let Some(name) = self.login.configured_target_name().cloned() {
-                            targets.push(DiscoveryTarget::new(name));
-                        }
+                    if targets.is_empty()
+                        && let Some(name) = self.login.configured_target_name().cloned()
+                    {
+                        targets.push(DiscoveryTarget::new(name));
                     }
                     let mut full_feature = FullFeatureState::new(
                         self.login.session_type(),

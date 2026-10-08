@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use zeroize::Zeroizing;
 
-use crate::auth::{validate_credentials, ChapCredentials, ChapError};
+use crate::auth::{ChapCredentials, ChapError, validate_credentials};
 use crate::login::IscsiName;
 use crate::login_policy::{AuthenticationPolicy, TargetLoginPolicy};
 use crate::scsi_target::MAX_LUN;

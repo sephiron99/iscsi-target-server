@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use bytes::{Bytes, BytesMut};
 
+use crate::Pdu;
 use crate::control::{
     AsyncMessage, LogoutResponse, LogoutResponseCode, NopIn, Reject, RejectReason,
     TaskMgmtResponse, TextResponse,
@@ -12,11 +13,10 @@ use crate::login::{IscsiName, SessionType, TextParameterError, TextParameters};
 use crate::opcode::TaskMgmtFunction;
 use crate::scsi::{R2t, ScsiCommand, ScsiDataIn, ScsiDataOut, ScsiResponse};
 use crate::scsi_target::{
-    ScsiExecution, SharedScsiTarget, SharedScsiTargetError, STATUS_CHECK_CONDITION, STATUS_GOOD,
+    STATUS_CHECK_CONDITION, STATUS_GOOD, ScsiExecution, SharedScsiTarget, SharedScsiTargetError,
 };
 use crate::serial::{SequenceError, SequenceState};
 use crate::target_login::NegotiatedDataParameters;
-use crate::Pdu;
 
 pub const RESERVED_TAG: u32 = u32::MAX;
 pub const DEFAULT_MAX_TEXT_SEQUENCE_LENGTH: usize = 1024 * 1024;
@@ -127,10 +127,10 @@ impl FullFeatureState {
         logged_in_target: Option<IscsiName>,
         mut discovery_targets: Vec<DiscoveryTarget>,
     ) -> Self {
-        if discovery_targets.is_empty() {
-            if let Some(target_name) = logged_in_target.clone() {
-                discovery_targets.push(DiscoveryTarget::new(target_name));
-            }
+        if discovery_targets.is_empty()
+            && let Some(target_name) = logged_in_target.clone()
+        {
+            discovery_targets.push(DiscoveryTarget::new(target_name));
         }
         Self {
             session_type,
@@ -247,7 +247,7 @@ impl FullFeatureState {
                             RejectReason::InvalidPduField,
                             rejected_header,
                             sequence,
-                        )))
+                        )));
                     }
                 };
                 let response = Pdu::LogoutResponse(LogoutResponse::with_response(

@@ -334,7 +334,7 @@ impl TargetLoginProcessor {
                 "CHAP_N" | "CHAP_R" if stage == LoginStage::Security => {}
                 // 단방향 CHAP 정책이므로 target 인증 요구는 명시적으로 거부한다.
                 "CHAP_I" | "CHAP_C" if stage == LoginStage::Security => {
-                    return Err(LOGIN_STATUS_AUTHENTICATION_FAILURE)
+                    return Err(LOGIN_STATUS_AUTHENTICATION_FAILURE);
                 }
                 key if key.starts_with("CHAP_") => return Err(LOGIN_STATUS_INVALID_REQUEST),
                 _ if stage != LoginStage::Operational => {
@@ -623,11 +623,7 @@ fn parse_bool(value: &str) -> Result<bool, (u8, u8)> {
 }
 
 fn yes_no(value: bool) -> &'static str {
-    if value {
-        "Yes"
-    } else {
-        "No"
-    }
+    if value { "Yes" } else { "No" }
 }
 
 fn minimum<T>(value: &str, target: T) -> Result<String, (u8, u8)>

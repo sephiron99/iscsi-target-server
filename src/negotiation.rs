@@ -8,7 +8,7 @@
 use bytes::BytesMut;
 
 use crate::digest::DigestType;
-use crate::frame::{FrameConfig, DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH, MAX_DATA_SEGMENT_LENGTH};
+use crate::frame::{DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH, FrameConfig, MAX_DATA_SEGMENT_LENGTH};
 use crate::login::{
     AuthMethod, AuthMethodError, IscsiName, IscsiNameError, LoginRequest, LoginResponse,
     SessionType, SessionTypeError, TextParameterError, TextParameters,
@@ -404,7 +404,7 @@ impl DigestNegotiation {
                         return Err(NegotiationError::UnsupportedDigest {
                             key,
                             value: value.to_owned(),
-                        })
+                        });
                     }
                 };
                 *self = Self::Complete(selected);
@@ -543,16 +543,16 @@ impl TargetLoginNegotiation {
                 max: self.max_text_sequence_length,
             });
         }
-        if let Some(previous) = self.initiator_fragment_stage {
-            if previous != request.current_stage {
-                return Err(NegotiationError::InvalidContinuation(
-                    LoginContinuationError::CrossesLoginStages {
-                        side: LoginSide::Initiator,
-                        previous,
-                        current: request.current_stage,
-                    },
-                ));
-            }
+        if let Some(previous) = self.initiator_fragment_stage
+            && previous != request.current_stage
+        {
+            return Err(NegotiationError::InvalidContinuation(
+                LoginContinuationError::CrossesLoginStages {
+                    side: LoginSide::Initiator,
+                    previous,
+                    current: request.current_stage,
+                },
+            ));
         }
         let mut encoded = BytesMut::with_capacity(len);
         encoded.extend_from_slice(&self.initiator_fragment);

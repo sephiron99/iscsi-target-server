@@ -6,9 +6,9 @@
 
 use bytes::{Bytes, BytesMut};
 
-use crate::digest::{crc32c_slices, DigestType};
+use crate::digest::{DigestType, crc32c_slices};
 use crate::error::{FrameError, PduError};
-use crate::{Opcode, Pdu, BHS_LEN};
+use crate::{BHS_LEN, Opcode, Pdu};
 
 /// Largest AHS area representable by the one-byte TotalAHSLength field.
 pub const MAX_AHS_LENGTH: usize = (u8::MAX as usize) * 4;

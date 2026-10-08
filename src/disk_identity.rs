@@ -174,21 +174,19 @@ impl VirtualDiskIdentity {
             if !header_lbas.contains(&last_lba) {
                 header_lbas.push(last_lba);
             }
-            if let Some(primary) = self.read_header(GPT_PRIMARY_HEADER_LBA)? {
-                if primary.alternate_lba < self.block_count
-                    && !header_lbas.contains(&primary.alternate_lba)
-                {
-                    header_lbas.push(primary.alternate_lba);
-                }
+            if let Some(primary) = self.read_header(GPT_PRIMARY_HEADER_LBA)?
+                && primary.alternate_lba < self.block_count
+                && !header_lbas.contains(&primary.alternate_lba)
+            {
+                header_lbas.push(primary.alternate_lba);
             }
             for &lba in &header_lbas.clone() {
-                if let Some(header) = self.read_header(lba)? {
-                    if !entry_arrays
+                if let Some(header) = self.read_header(lba)?
+                    && !entry_arrays
                         .iter()
                         .any(|known| known.overlaps(&header.entries))
-                    {
-                        entry_arrays.push(header.entries);
-                    }
+                {
+                    entry_arrays.push(header.entries);
                 }
             }
         }
@@ -399,10 +397,10 @@ impl StorageBackend for VirtualDiskIdentity {
         // 이 write에 들어 있는 header. Initiator가 보는 형태이며 CRC까지 유효한 것만 다룬다.
         let mut written_headers = Vec::new();
         for header_lba in self.header_lbas.clone() {
-            if let Some(range) = self.sector_range(lba, data.len(), header_lba) {
-                if let Some(header) = parse_gpt_header(&data[range], header_lba, self.block_count) {
-                    written_headers.push((header_lba, header));
-                }
+            if let Some(range) = self.sector_range(lba, data.len(), header_lba)
+                && let Some(header) = parse_gpt_header(&data[range], header_lba, self.block_count)
+            {
+                written_headers.push((header_lba, header));
             }
         }
 

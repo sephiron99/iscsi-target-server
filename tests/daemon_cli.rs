@@ -13,7 +13,7 @@ use bytes::Bytes;
 use iscsi_target_server::control::LogoutRequest;
 use iscsi_target_server::login::{LoginRequest, LoginResponse, TextParameters};
 use iscsi_target_server::opcode::LoginStage;
-use iscsi_target_server::{Pdu, BHS_LEN};
+use iscsi_target_server::{BHS_LEN, Pdu};
 
 const TARGET_NAME: &str = "iqn.2026-07.example.com:cli";
 

@@ -46,13 +46,13 @@ pub mod daemon;
 pub mod target_service;
 
 pub use auth::{ChapCredentials, ChapError, ChapExchange};
-pub use bhs::{Bhs, BHS_LEN};
+pub use bhs::{BHS_LEN, Bhs};
 pub use config::{
     AuthenticationConfig, ChapAuthenticationConfig, ConfigError, DaemonConfig, ListenConfig,
     LunBackendConfig, LunConfig, TargetConfig,
 };
 pub use config_file::{
-    ConfigFileError, ConfigFileKind, ConfigIoOperation, CONFIG_FILE_VERSION, MAX_CONFIG_FILE_LENGTH,
+    CONFIG_FILE_VERSION, ConfigFileError, ConfigFileKind, ConfigIoOperation, MAX_CONFIG_FILE_LENGTH,
 };
 pub use connection::{
     ConnectionCloseReason, ConnectionError, ConnectionOutput, ConnectionPhase,
@@ -60,14 +60,14 @@ pub use connection::{
 };
 #[cfg(feature = "codec")]
 pub use connection_io::{
-    run_connection, run_connection_with_executor, BlockingStorageExecutor,
-    BlockingStorageExecutorError, ConnectionIoError, DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS,
+    BlockingStorageExecutor, BlockingStorageExecutorError, ConnectionIoError,
+    DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS, run_connection, run_connection_with_executor,
 };
-pub use control_state::{ControlError, DiscoveryTarget, DEFAULT_MAX_TEXT_SEQUENCE_LENGTH};
+pub use control_state::{ControlError, DEFAULT_MAX_TEXT_SEQUENCE_LENGTH, DiscoveryTarget};
 pub use error::{CodecError, FrameError, PduError};
 pub use frame::{
-    FrameCodec, FrameConfig, PduFrame, RawFrame, DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH,
-    MAX_AHS_LENGTH, MAX_DATA_SEGMENT_LENGTH,
+    DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH, FrameCodec, FrameConfig, MAX_AHS_LENGTH,
+    MAX_DATA_SEGMENT_LENGTH, PduFrame, RawFrame,
 };
 pub use login::{
     AuthMethod, AuthMethodError, IscsiName, IscsiNameError, SessionType, SessionTypeError,
@@ -78,9 +78,9 @@ pub use login_policy::{
 };
 pub use management::{ManagementError, TargetServiceApi, TargetStatus};
 pub use negotiation::{
-    LoginContinuationError, LoginSide, LoginTransitionError, NegotiatedFrameParameters,
-    NegotiationError, TargetLoginNegotiation, DEFAULT_MAX_LOGIN_TEXT_SEQUENCE_LENGTH,
-    MIN_LOGIN_TEXT_SEQUENCE_LENGTH, MIN_MAX_RECV_DATA_SEGMENT_LENGTH,
+    DEFAULT_MAX_LOGIN_TEXT_SEQUENCE_LENGTH, LoginContinuationError, LoginSide,
+    LoginTransitionError, MIN_LOGIN_TEXT_SEQUENCE_LENGTH, MIN_MAX_RECV_DATA_SEGMENT_LENGTH,
+    NegotiatedFrameParameters, NegotiationError, TargetLoginNegotiation,
 };
 pub use opcode::Opcode;
 pub use scsi_target::{

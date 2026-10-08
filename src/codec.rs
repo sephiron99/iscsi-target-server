@@ -3,12 +3,12 @@
 use bytes::{Bytes, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
+use crate::Pdu;
 use crate::digest::DigestType;
 use crate::error::CodecError;
 use crate::frame::{FrameCodec, FrameConfig, PduFrame, RawFrame};
 use crate::login::{LoginRequest, LoginResponse};
 use crate::negotiation::{NegotiatedFrameParameters, NegotiationError, TargetLoginNegotiation};
-use crate::Pdu;
 
 /// Converts a Tokio byte stream into typed iSCSI PDUs while preserving AHS.
 pub struct IscsiCodec {
