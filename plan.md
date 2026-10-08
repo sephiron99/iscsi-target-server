@@ -254,6 +254,15 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
    - Ctrl+C로 storage drain을 포함한 graceful shutdown이 되고 종료 후 volume이 다시 mount된다.
    - 실패 시 `StorageIoError`의 operation/`ErrorKind`/OS error code를 기록해 원인을 좁힌다.
 
+### `virtual-disk-identity` 사용 시 알려진 동작
+
+버그가 아닌 정상 동작이며, 11단계의 "지원 범위와 알려진 제한" 문서에 옮겨 적는다.
+
+- Windows는 드라이브 문자를 partition GUID 기준으로 기억한다. 가상화를 켜면 Initiator에게 보이는 partition GUID가 달라지므로 Windows는 처음 보는 partition으로 취급하고, 원본 disk에 기억해 둔 문자를 쓰지 않는다.
+- 그래서 GPT 속성에 "드라이브 문자 자동 할당 안 함"(`NoDefaultDriveLetter`)이 켜진 partition은 문자를 받지 못해 탐색기에 나타나지 않는다. 예: Rufus가 만드는 1MB `UEFI_NTFS` partition. 그 속성이 없는 partition은 새로 문자를 받는다.
+- partition 자체는 정상이고 디스크 관리에는 모두 보인다. 필요하면 디스크 관리에서 문자를 직접 지정한다. 지정은 Windows 레지스트리에 저장되고 disk에는 쓰지 않으며, 가상 GUID 기준으로 기억되어 다음 연결부터 유지된다.
+- 같은 이유로 USB를 직접 꽂았을 때와 iSCSI로 연결했을 때 드라이브 문자가 서로 다를 수 있고, 한쪽에서 바꾼 문자는 다른 쪽에 반영되지 않는다.
+
 완료 조건:
 
 - Linux와 Windows Initiator에서 반복 가능한 end-to-end 테스트가 성공한다.
