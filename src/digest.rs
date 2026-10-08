@@ -1,4 +1,4 @@
-// pdu/src/digest.rs
+// src/digest.rs
 //
 // CRC32C (Castagnoli) 다이제스트 — iSCSI 무결성 검증
 //

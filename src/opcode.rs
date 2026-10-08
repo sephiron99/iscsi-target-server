@@ -1,4 +1,4 @@
-// pdu/src/opcode.rs
+// src/opcode.rs
 //
 // iSCSI opcode 및 비트필드 정의 (RFC 3720 §10.2.1)
 //

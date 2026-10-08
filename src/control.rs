@@ -1,4 +1,4 @@
-// pdu/src/control.rs
+// src/control.rs
 //
 // 제어 PDU들 — NOP(keepalive), Logout, Text, TMF, Reject
 

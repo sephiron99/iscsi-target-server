@@ -10,10 +10,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
-use pdu::control::LogoutRequest;
-use pdu::login::{LoginRequest, LoginResponse, TextParameters};
-use pdu::opcode::LoginStage;
-use pdu::{Pdu, BHS_LEN};
+use iscsi_target_server::control::LogoutRequest;
+use iscsi_target_server::login::{LoginRequest, LoginResponse, TextParameters};
+use iscsi_target_server::opcode::LoginStage;
+use iscsi_target_server::{Pdu, BHS_LEN};
 
 const TARGET_NAME: &str = "iqn.2026-07.example.com:cli";
 

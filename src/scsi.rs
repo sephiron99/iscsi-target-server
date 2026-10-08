@@ -1,4 +1,4 @@
-// pdu/src/scsi.rs
+// src/scsi.rs
 //
 // SCSI 데이터 경로 PDU들 — iSCSI의 핵심 트래픽
 //

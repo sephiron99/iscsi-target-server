@@ -137,6 +137,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "iscsi-target-server"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bytes",
+ "crc32c",
+ "getrandom",
+ "md-5",
+ "serde",
+ "subtle",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "windows-sys",
+ "zeroize",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -214,27 +235,6 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
-]
-
-[[package]]
-name = "pdu"
-version = "0.1.0"
-dependencies = [
- "base64",
- "bytes",
- "crc32c",
- "getrandom",
- "md-5",
- "serde",
- "subtle",
- "thiserror",
- "tokio",
- "tokio-util",
- "toml",
- "tracing",
- "tracing-subscriber",
- "windows-sys",
- "zeroize",
 ]
 
 [[package]]

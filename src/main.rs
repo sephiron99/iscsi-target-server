@@ -5,8 +5,8 @@
 
 use std::process::ExitCode;
 
-use pdu::daemon::{self, CliCommand, Daemon};
-use pdu::{DaemonConfig, TargetServiceError};
+use iscsi_target_server::daemon::{self, CliCommand, Daemon};
+use iscsi_target_server::{DaemonConfig, TargetServiceError};
 
 fn main() -> ExitCode {
     let options = match daemon::parse_arguments(std::env::args().skip(1)) {

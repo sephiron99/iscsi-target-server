@@ -1,4 +1,4 @@
-// pdu/src/login.rs
+// src/login.rs
 //
 // Login Request/Response — 가장 복잡한 PDU
 //

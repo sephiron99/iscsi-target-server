@@ -1,4 +1,4 @@
-// pdu/src/lib.rs
+// src/lib.rs
 //
 // iSCSI PDU 계층 — 와이어 포맷과 타입 안전한 표현 사이의 변환
 //

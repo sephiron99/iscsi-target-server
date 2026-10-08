@@ -58,7 +58,7 @@ protocol core가 Target 설정, 디스크 경로, 로깅 정책, UI, 플랫폼 �
 
 ### iSCSI protocol core
 
-현재 `pdu` 크레이트는 향후 core 크레이트 후보이다. 다음과 같은 프로토콜 공통 기능을 둔다.
+현재는 모든 코드가 `iscsi-target-server` 크레이트 하나에 있다. 그중 wire 형식을 다루는 모듈이 향후 core 크레이트 후보이며 다음과 같은 프로토콜 공통 기능을 둔다.
 
 - BHS와 opcode 정의
 - 타입이 있는 PDU 파싱과 직렬화

@@ -1,4 +1,4 @@
-// pdu/src/bhs.rs
+// src/bhs.rs
 //
 // Bhs — 48바이트 Basic Header Segment의 저수준 래퍼
 //

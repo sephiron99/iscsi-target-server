@@ -1,4 +1,4 @@
-// pdu/src/error.rs
+// src/error.rs
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum PduError {

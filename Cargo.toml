@@ -1,8 +1,8 @@
 [package]
-name = "pdu"
+name = "iscsi-target-server"
 version = "0.1.0"
 edition = "2021"
-description = "iSCSI PDU 파싱/직렬화 (RFC 7143)"
+description = "User-space iSCSI target server for Windows 10/11 (RFC 7143)"
 license = "GPL-3.0-or-later"
 
 [dependencies]
