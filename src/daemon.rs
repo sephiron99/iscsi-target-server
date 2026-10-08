@@ -142,8 +142,9 @@ pub struct Daemon {
 impl Daemon {
     /// 검증된 설정으로 Target을 등록하고 listener를 bind한다.
     ///
-    /// 현재 Login 정책은 Connection마다 하나의 Target에 바인딩되므로 daemon은 단일
-    /// Target 설정만 허용한다. Login 시점 `TargetName` 선택은 별도 계획 항목이다.
+    /// daemon은 단일 Target만 허용한다. Connection은 수락 시점에 그 Target에
+    /// 바인딩되고 Login의 `TargetName`은 일치 여부만 검증한다. 원본 iSCSIConsole과
+    /// 달리 `TargetName`으로 Target을 선택하는 다중 Target은 지원하지 않는다.
     pub async fn bind(config: &DaemonConfig) -> Result<Self, DaemonError> {
         config.validate()?;
         let targets = config.targets();
@@ -213,7 +214,7 @@ pub async fn shutdown_signal() -> Result<(), std::io::Error> {
 pub enum DaemonError {
     #[error(transparent)]
     Config(#[from] ConfigError),
-    #[error("daemon은 현재 단일 Target 설정만 지원한다; {0}개가 설정되었다")]
+    #[error("daemon은 단일 Target 설정만 지원한다; {0}개가 설정되었다")]
     MultipleTargetsUnsupported(usize),
     #[error(transparent)]
     Management(#[from] ManagementError),

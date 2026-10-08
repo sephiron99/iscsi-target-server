@@ -170,7 +170,7 @@ VHD/VMDK 지원은 이 단계의 범위가 아니며 13단계로 미뤘다. 이 
 - [x] 구조화된 logging과 민감 정보 필터링
 - [x] headless 실행용 CLI
 - [x] daemon과 CLI 통합 테스트
-- [ ] Login 시점 `TargetName`으로 Target을 선택하는 다중 Target Connection — daemon은 현재 단일 Target 설정만 허용
+- [x] Target 수 결정: daemon은 단일 Target만 허용한다. Login 시점 `TargetName`으로 Target을 선택하는 다중 Target Connection은 구현하지 않으며, Target이 하나가 아닌 설정은 시작 시 거부한다. 여러 disk는 한 Target의 여러 LUN으로 내보낸다
 
 완료 조건:
 

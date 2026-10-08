@@ -86,6 +86,7 @@ Block Limits, Block Device Characteristics 제공.
 | GUI                 | WinForms (target 추가, VHD/RAM disk 생성, 디스크/volume 선택) | WinSafe 계획 (9단계, 미구현)                       |
 | 설정 저장/복원      | **없음 — 재시작마다 GUI로 재구성**                            | versioned TOML load/save + 외부 CHAP secret 파일   |
 | CLI / headless 실행 | 없음                                                          | `iscsi-targetd` TOML 설정 daemon (단일 Target)     |
+| Target 수           | 여러 Target (Login의 `TargetName`으로 선택)                   | 단일 Target만 허용 (의도적 차이, 여러 LUN은 가능)  |
 | service API         | 이벤트 훅 수준                                                | Target/LUN 추가·제거·상태 조회 구현                |
 | logging             | severity 로그 + 파일                                          | tracing 구조화 로깅 (secret/payload 미기록)        |
 | 크로스플랫폼        | Windows + Mono(Linux/macOS/WinPE)                             | Windows 10/11 전용 (그 외 OS 배제)                 |

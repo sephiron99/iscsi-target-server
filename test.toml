@@ -4,7 +4,7 @@
 # 실행:  iscsi-targetd.exe --config test.toml --log-level debug
 #
 # 실행 후 Windows `iscsicpl`에서 포털 127.0.0.1:3260을 추가해 연결한다.
-# daemon은 현재 단일 Target만 지원한다.
+# daemon은 단일 Target만 지원한다. 여러 disk는 한 Target의 여러 LUN으로 내보낸다.
 
 version = 1
 
