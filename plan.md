@@ -149,6 +149,7 @@
 - [x] backend I/O 오류의 작업 종류, `ErrorKind`와 OS error code 보존
 - [-] Windows CI workflow에 physical disk/volume backend compile 및 단위 테스트 추가, 첫 runner 검증 대기
 - [-] removable/USB physical disk 지원: sector size 조회의 `IOCTL_DISK_GET_DRIVE_GEOMETRY` fallback과 disk 전체 read-write serve 시 mounted volume 일괄 lock/dismount, 실기기 검증 대기
+- [-] physical disk serve 전 경고 후 offline 전환과 종료 시 online 복원 (`IOCTL_DISK_SET_DISK_ATTRIBUTES`, 재부팅 후 비유지). 전환을 지원하지 않는 disk는 경고 후 기존 volume lock 방식으로 fallback, 실기기 검증 대기
 - [ ] physical disk 열거 API (device number, description, serial number, bus type, removable 여부) — GUI/CLI 디스크 선택용
 
 완료 조건:
@@ -245,7 +246,8 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 6. Initiator 연결: `iscsicpl`에서 포털(같은 PC는 `127.0.0.1`) 추가 → Target 연결 → 디스크 관리에서 disk 인식, read/write/flush 수행. 원격 검증 시 TCP 3260 방화벽 인바운드를 허용한다.
 7. 확인 항목:
    - read-only 전체 disk serve에서 sector size 조회(geometry fallback 포함)와 read가 동작한다.
-   - read-write 전체 disk serve 시작 시 해당 disk의 mounted volume이 일괄 lock/dismount된다. USB의 파일을 열어 둔 상태에서는 시작이 실패해야 한다.
+   - 전체 disk serve 시작 시 offline 전환 경고 로그가 먼저 나오고 `Get-Disk`의 `IsOffline`이 `True`가 된다. 종료 후에는 다시 `False`로 돌아온다. 시작 전부터 offline이던 disk는 종료 후에도 offline으로 남는다.
+   - offline 전환에 실패한 disk는 경고 후 online 상태로 serve된다. 이때 read-write serve는 해당 disk의 mounted volume을 일괄 lock/dismount하고, USB의 파일을 열어 둔 상태에서는 시작이 실패해야 한다.
    - volume 단위 serve가 lock+dismount 후 동작한다.
    - serve 중 USB 제거 시 initiator가 CHECK CONDITION(medium error)을 받고 connection이 유지된다.
    - Ctrl+C로 storage drain을 포함한 graceful shutdown이 되고 종료 후 volume이 다시 mount된다.

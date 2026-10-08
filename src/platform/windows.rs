@@ -10,7 +10,7 @@ use std::mem::{offset_of, size_of};
 use std::os::windows::ffi::OsStringExt;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 
 use windows_sys::Win32::Foundation::{ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE};
@@ -19,10 +19,12 @@ use windows_sys::Win32::Storage::FileSystem::{
     IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
 };
 use windows_sys::Win32::System::Ioctl::{
-    PropertyStandardQuery, StorageAccessAlignmentProperty, DISK_EXTENT, DISK_GEOMETRY,
-    FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, GET_LENGTH_INFORMATION,
-    IOCTL_DISK_GET_DRIVE_GEOMETRY, IOCTL_DISK_GET_LENGTH_INFO, IOCTL_STORAGE_QUERY_PROPERTY,
-    STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR, STORAGE_PROPERTY_QUERY, VOLUME_DISK_EXTENTS,
+    PropertyStandardQuery, StorageAccessAlignmentProperty, DISK_ATTRIBUTE_OFFLINE, DISK_EXTENT,
+    DISK_GEOMETRY, FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, GET_DISK_ATTRIBUTES,
+    GET_LENGTH_INFORMATION, IOCTL_DISK_GET_DISK_ATTRIBUTES, IOCTL_DISK_GET_DRIVE_GEOMETRY,
+    IOCTL_DISK_GET_LENGTH_INFO, IOCTL_DISK_SET_DISK_ATTRIBUTES, IOCTL_STORAGE_QUERY_PROPERTY,
+    SET_DISK_ATTRIBUTES, STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR, STORAGE_PROPERTY_QUERY,
+    VOLUME_DISK_EXTENTS,
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
@@ -54,11 +56,19 @@ enum WindowsDeviceKind {
 /// Windows physical disk 또는 volume handle을 감싼 block backend.
 ///
 /// `ReadWrite` volume은 handle 수명 동안 `FSCTL_LOCK_VOLUME`을 획득하고 dismount한다.
-/// `ReadWrite` physical disk는 그 위의 mounted volume을 전부 lock/dismount한 뒤 잠금
+///
+/// physical disk는 접근 방식과 무관하게 serve 전에 경고를 남기고 disk를 offline으로
+/// 바꾼다. host가 같은 disk의 volume을 mount한 채로 Initiator에 내주면 양쪽 filesystem이
+/// 서로 모르는 변경을 하게 되고, 같은 PC의 Initiator는 disk signature 충돌을 만나기
+/// 때문이다. offline 전환은 재부팅 후 유지되지 않게 요청하며, 이 backend가 offline으로
+/// 바꾼 disk는 drop할 때 다시 online으로 되돌린다. 이미 offline이던 disk는 그대로 둔다.
+///
+/// offline 전환에 실패한 disk는 경고 후 이전 방식으로
+/// 동작한다: `ReadWrite`이면 그 위의 mounted volume을 전부 lock/dismount하고 잠금
 /// handle을 backend 수명 동안 유지한다 — Windows가 mounted volume extent에 대한 physical
-/// disk 직접 write를 차단하기 때문이다 (자동 mount되는 USB 이동식 디스크 포함). backend를
-/// drop하면 잠금이 해제되어 volume이 다시 mount될 수 있다. 두 경우 모두 보통 관리자
-/// 권한이 필요하다.
+/// disk 직접 write를 차단하기 때문이다. `ReadOnly`이면 volume을 건드리지 않는다.
+///
+/// 모든 경우에 보통 관리자 권한이 필요하다.
 #[derive(Debug)]
 pub struct WindowsStorageBackend {
     file: File,
@@ -69,6 +79,8 @@ pub struct WindowsStorageBackend {
     /// physical disk를 `ReadWrite`로 여는 동안 잠근 volume handle들.
     /// 잠금은 handle이 닫힐 때 해제되므로 backend 수명 동안 보관만 한다.
     _volume_locks: Vec<File>,
+    /// 이 backend가 offline으로 바꾼 physical disk. drop하면 online으로 되돌린다.
+    _offline: Option<DiskOfflineGuard>,
 }
 
 impl WindowsStorageBackend {
@@ -121,8 +133,15 @@ impl WindowsStorageBackend {
             .read(true)
             .write(!read_only)
             .share_mode(share_mode)
-            .open(path)
+            .open(&path)
             .map_err(|error| storage_io_error(StorageIoOperation::Open, error))?;
+
+        let offline = match kind {
+            WindowsDeviceKind::Volume => None,
+            WindowsDeviceKind::PhysicalDrive { device_number } => {
+                take_disk_offline(&path, &file, read_only, device_number)
+            }
+        };
 
         let volume_locks = if read_only {
             Vec::new()
@@ -133,6 +152,8 @@ impl WindowsStorageBackend {
                     device_io_control_no_buffers(&file, FSCTL_DISMOUNT_VOLUME)?;
                     Vec::new()
                 }
+                // offline disk에는 mounted volume이 없으므로 잠글 대상도 없다.
+                WindowsDeviceKind::PhysicalDrive { .. } if offline.is_some() => Vec::new(),
                 WindowsDeviceKind::PhysicalDrive { device_number } => {
                     lock_mounted_volumes_on_disk(device_number)?
                 }
@@ -155,6 +176,7 @@ impl WindowsStorageBackend {
             read_only,
             durable_flush: true,
             _volume_locks: volume_locks,
+            _offline: offline,
         })
     }
 }
@@ -240,6 +262,155 @@ fn query_access_alignment(
         AdditionalParameters: [0],
     };
     device_io_control(file, IOCTL_STORAGE_QUERY_PROPERTY, &query)
+}
+
+/// offline으로 바꾼 physical disk를 drop 시점에 online으로 되돌리는 guard.
+///
+/// `control`은 `IOCTL_DISK_SET_DISK_ATTRIBUTES`가 요구하는 read/write 접근을 가진
+/// handle이다. data handle과 별도로 소유하므로 field drop 순서에 의존하지 않는다.
+#[derive(Debug)]
+struct DiskOfflineGuard {
+    control: File,
+    device_number: u32,
+}
+
+impl Drop for DiskOfflineGuard {
+    fn drop(&mut self) {
+        match set_disk_offline(&self.control, false) {
+            Ok(()) => log_disk_restored_online(self.device_number),
+            Err(error) => log_disk_online_restore_failed(self.device_number, &error),
+        }
+    }
+}
+
+/// physical disk를 경고 후 offline으로 바꾸고, 바꿨다면 복원 guard를 반환한다.
+///
+/// offline 전환은 serve의 전제 조건이 아니라 보호 조치이므로 실패해도 open을
+/// 중단하지 않는다. 이미 offline이거나 전환할 수 없으면 `None`을 반환하고 호출자가
+/// volume lock 방식으로 계속한다.
+fn take_disk_offline(
+    path: &Path,
+    data: &File,
+    read_only: bool,
+    device_number: u32,
+) -> Option<DiskOfflineGuard> {
+    // `ReadOnly` data handle에는 write 접근이 없어 attribute를 바꿀 수 없으므로 제어용
+    // handle을 따로 연다. `ReadWrite` data handle은 배타적으로 열려 있어 두 번째 open이
+    // 불가능하므로 같은 접근 권한을 가진 handle을 복제한다.
+    let control = if read_only {
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(path)
+    } else {
+        data.try_clone()
+    };
+    let control = match control {
+        Ok(control) => control,
+        Err(error) => {
+            let error = storage_io_error(StorageIoOperation::Open, error);
+            log_disk_offline_unavailable(device_number, &error);
+            return None;
+        }
+    };
+
+    match query_disk_offline(&control) {
+        Ok(true) => {
+            log_disk_already_offline(device_number);
+            return None;
+        }
+        Ok(false) => {}
+        Err(error) => {
+            log_disk_offline_unavailable(device_number, &error);
+            return None;
+        }
+    }
+
+    log_disk_going_offline(device_number);
+    match set_disk_offline(&control, true) {
+        Ok(()) => Some(DiskOfflineGuard {
+            control,
+            device_number,
+        }),
+        Err(error) => {
+            log_disk_offline_unavailable(device_number, &error);
+            None
+        }
+    }
+}
+
+fn query_disk_offline(disk: &File) -> Result<bool, StorageError> {
+    let attributes: GET_DISK_ATTRIBUTES =
+        device_io_control_output(disk, IOCTL_DISK_GET_DISK_ATTRIBUTES)?;
+    Ok(attributes.Attributes & DISK_ATTRIBUTE_OFFLINE != 0)
+}
+
+fn set_disk_offline(disk: &File, offline: bool) -> Result<(), StorageError> {
+    let request = disk_offline_request(offline)?;
+    device_io_control_input(disk, IOCTL_DISK_SET_DISK_ATTRIBUTES, &request)
+}
+
+/// offline attribute 하나만 바꾸는 요청. `Persist`를 끄므로 daemon이 비정상 종료해
+/// 복원하지 못해도 재부팅하면 disk가 원래 상태로 돌아온다.
+fn disk_offline_request(offline: bool) -> Result<SET_DISK_ATTRIBUTES, StorageError> {
+    Ok(SET_DISK_ATTRIBUTES {
+        Version: u32::try_from(size_of::<SET_DISK_ATTRIBUTES>())
+            .map_err(|_| StorageError::OutOfRange)?,
+        Persist: false,
+        Attributes: if offline { DISK_ATTRIBUTE_OFFLINE } else { 0 },
+        AttributesMask: DISK_ATTRIBUTE_OFFLINE,
+        ..SET_DISK_ATTRIBUTES::default()
+    })
+}
+
+fn log_disk_going_offline(device_number: u32) {
+    #[cfg(feature = "tracing")]
+    tracing::warn!(
+        device_number,
+        "physical disk를 offline으로 전환한다. serve하는 동안 이 PC에서 해당 disk의 volume에 접근할 수 없고, 종료하면 online으로 되돌린다"
+    );
+    #[cfg(not(feature = "tracing"))]
+    let _ = device_number;
+}
+
+fn log_disk_already_offline(device_number: u32) {
+    #[cfg(feature = "tracing")]
+    tracing::info!(
+        device_number,
+        "physical disk가 이미 offline이다. 상태를 바꾸지 않으며 종료 시에도 그대로 둔다"
+    );
+    #[cfg(not(feature = "tracing"))]
+    let _ = device_number;
+}
+
+fn log_disk_offline_unavailable(device_number: u32, error: &StorageError) {
+    #[cfg(feature = "tracing")]
+    tracing::warn!(
+        device_number,
+        %error,
+        "physical disk를 offline으로 전환하지 못했다. online 상태로 serve하므로 이 PC에서 해당 disk의 volume을 사용하지 말아야 한다"
+    );
+    #[cfg(not(feature = "tracing"))]
+    let _ = (device_number, error);
+}
+
+fn log_disk_restored_online(device_number: u32) {
+    #[cfg(feature = "tracing")]
+    tracing::info!(device_number, "physical disk를 online으로 되돌렸다");
+    #[cfg(not(feature = "tracing"))]
+    let _ = device_number;
+}
+
+fn log_disk_online_restore_failed(device_number: u32, error: &StorageError) {
+    #[cfg(feature = "tracing")]
+    tracing::warn!(
+        device_number,
+        %error,
+        "physical disk를 online으로 되돌리지 못했다. 디스크 관리나 재부팅으로 복원해야 한다"
+    );
+    #[cfg(not(feature = "tracing"))]
+    let _ = (device_number, error);
 }
 
 /// 대상 physical disk 위의 mounted volume을 모두 lock/dismount하고 handle을 반환한다.
@@ -447,6 +618,33 @@ fn device_io_control_no_buffers(file: &File, code: u32) -> Result<(), StorageErr
     Ok(())
 }
 
+fn device_io_control_input<I>(file: &File, code: u32, input: &I) -> Result<(), StorageError> {
+    let input_size = u32::try_from(size_of::<I>()).map_err(|_| StorageError::OutOfRange)?;
+    let mut returned = 0;
+    // SAFETY: input은 전달한 크기만큼 유효하며 호출이 끝날 때까지 살아 있다. handle은
+    // 열린 `File` 소유이고 동기 호출이므로 OVERLAPPED는 null이다. 이 control code는
+    // output buffer를 요구하지 않는다.
+    let succeeded = unsafe {
+        DeviceIoControl(
+            file.as_raw_handle(),
+            code,
+            input as *const I as *const c_void,
+            input_size,
+            null_mut(),
+            0,
+            &mut returned,
+            null_mut(),
+        )
+    };
+    if succeeded == 0 {
+        return Err(storage_io_error(
+            StorageIoOperation::DeviceControl,
+            std::io::Error::last_os_error(),
+        ));
+    }
+    Ok(())
+}
+
 fn device_io_control_output<T: Default>(file: &File, code: u32) -> Result<T, StorageError> {
     let input = ();
     device_io_control(file, code, &input)
@@ -525,6 +723,29 @@ mod tests {
         assert_eq!(volume_device_path(&unterminated), None);
         assert_eq!(volume_device_path(&[u16::from(b'\\'), 0]), None);
         assert_eq!(volume_device_path(&[0]), None);
+    }
+
+    #[test]
+    fn disk_offline_request_changes_only_the_offline_attribute_without_persisting() {
+        let offline = disk_offline_request(true).unwrap();
+        assert_eq!(offline.Version, 40);
+        assert!(!offline.Persist);
+        assert_eq!(offline.Attributes, 1);
+        assert_eq!(offline.AttributesMask, 1);
+
+        let online = disk_offline_request(false).unwrap();
+        assert_eq!(online.Version, 40);
+        assert!(!online.Persist);
+        assert_eq!(online.Attributes, 0);
+        assert_eq!(online.AttributesMask, 1);
+    }
+
+    #[test]
+    fn missing_physical_drive_fails_at_open_before_any_offline_change() {
+        let error =
+            WindowsStorageBackend::open_physical_drive(u32::MAX, WindowsStorageAccess::ReadOnly)
+                .unwrap_err();
+        assert!(matches!(error, StorageError::Io(_)));
     }
 
     fn extents_with_count(count: u32) -> VOLUME_DISK_EXTENTS {

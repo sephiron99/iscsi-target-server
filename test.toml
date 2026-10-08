@@ -35,6 +35,8 @@ block-count = 1310720
 
 # USB 등 물리 disk 전체. 관리자 권한이 필요하다. device-number는
 # `Get-Disk`의 Number이며 IsSystem = True인 disk는 사용하지 않는다.
+# serve를 시작하면 경고 로그를 남기고 disk를 offline으로 바꾸며 종료할 때 online으로
+# 되돌린다. offline 전환에 실패한 disk는 경고 후 online 상태로 serve한다.
 # [[targets.luns]]
 # lun = 2
 # backend = "windows-physical-drive"
