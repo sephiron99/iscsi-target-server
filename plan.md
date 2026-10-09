@@ -240,7 +240,7 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 
 이 절차가 성공하면 위의 USB 시나리오 항목과 7단계의 `[-]` removable/USB 항목을 완료로 올린다.
 
-1. 준비: WSL에서 `cargo build-win32`(`cargo cross`, 기본 target `i686-pc-windows-gnu`)로 `iscsi-targetd.exe`를 cross-build하고 `target/i686-pc-windows-gnu/release/`의 결과물을 Windows로 복사한다.
+1. 준비: WSL에서 `cargo build-win64`(target `x86_64-pc-windows-msvc`)로 `iscsi-targetd.exe`를 cross-build하고 `target/x86_64-pc-windows-msvc/release/`의 결과물을 Windows로 복사한다.
 2. 대상 확인: `Get-Disk | Format-Table Number, FriendlyName, BusType, Size, IsSystem`에서 `BusType`이 `USB`인 디스크의 `Number`를 확인한다. `IsSystem = True`인 디스크는 사용하지 않는다.
 3. 설정 파일: 저장소의 `sample.toml`(모든 옵션의 설명과 backend별 예시)을 `usb.toml`로 복사해, `backend = "windows-physical-drive"` + `device-number`로 전체 disk LUN을 구성한다. 첫 검증은 `read-only = true`로 시작하고, volume 단위 검증은 `backend = "windows-volume"` + `drive-letter`를 사용한다.
 4. 구조 검증: `iscsi-targetd.exe --config usb.toml --check` (장치를 열지 않으므로 일반 권한으로 가능하다).
@@ -313,12 +313,12 @@ crates.io에는 올리지 않고 GitHub release의 실행 파일로 배포한다
 
 ```sh
 cargo fmt --all -- --check
-cargo cross test --workspace
-cargo cross clippy --workspace --all-targets -- -D warnings
+cargo test-win64
+cargo clippy-win64
 git diff --check
 ```
 
-`.cargo/config.toml`의 기본 build target은 `i686-pc-windows-gnu`이다. WSL host에서는 `cargo cross`가 mingw-w64 toolchain을 구성하고 WSL interop으로 Windows test binary를 실행한다. `cargo cross` 없이 `cargo test`를 직접 실행하면 linker를 찾지 못해 실패한다.
+빌드 target은 `x86_64-pc-windows-msvc`(기본, 검증 기준)와 `i686-pc-windows-msvc`이다. WSL host에서는 Windows의 MSVC linker를 부르는 스크립트로 cross-build하고 WSL interop으로 Windows test binary를 실행한다. 그 linker 설정은 WSL 사용자의 `~/.cargo/config.toml`에 두며, 준비 방법은 저장소 `.cargo/config.toml`의 주석에 있다.
 
 Windows GUI가 추가된 뒤에는 Windows runner에서 GUI target의 build/check도 필수 검증에 포함한다.
 Windows storage backend는 GUI 도입 전부터 `windows-latest` runner에서 test와 clippy를 실행한다.

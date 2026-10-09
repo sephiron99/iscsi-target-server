@@ -171,14 +171,16 @@ sequence number를 구현할 때는 serial number 산술과 wraparound를 명시
 
 ```sh
 cargo fmt --all -- --check
-cargo cross test --workspace
-cargo cross clippy --workspace --all-targets -- -D warnings
+cargo test-win64
+cargo clippy-win64
 git diff --check
 ```
 
 라이브러리에는 Cargo feature가 없다. 전체를 하나로 배포하므로 빌드 형태도 하나만 둔다.
 
-`.cargo/config.toml`의 기본 build target은 `i686-pc-windows-gnu`이다. WSL host에서는 `cargo cross`가 mingw-w64 toolchain을 구성하고 WSL interop으로 Windows test binary를 실행한다. `cargo cross` 없이 `cargo test`를 직접 실행하면 linker를 찾지 못해 실패한다.
+빌드 target은 MSVC 둘이다. `x86_64-pc-windows-msvc`가 기본이자 검증 기준이고, `i686-pc-windows-msvc`는 `cargo build-win32`와 `cargo test-win32`로 추가 확인한다. cargo-cross와 mingw(`*-windows-gnu`) target은 쓰지 않는다.
+
+WSL host에서는 Windows에 설치된 MSVC linker를 부르는 스크립트로 cross-build하고, WSL interop으로 Windows test binary를 실행한다. linker와 runner 설정은 PC마다 달라서 저장소가 아니라 WSL 사용자의 `~/.cargo/config.toml`에 둔다. 그 설정이 없으면 linker를 찾지 못해 빌드가 실패한다. 준비 방법과 제약은 `.cargo/config.toml`의 주석에 있다. 저장소의 `.cargo/config.toml`에 WSL 전용 linker 설정을 넣지 않는다. 넣으면 Windows에서 하는 빌드와 CI가 깨진다.
 
 관련 변경에는 다음 테스트를 포함한다.
 

@@ -83,23 +83,29 @@ Do not use it for data you cannot afford to lose.
 
 ## Building
 
-The server only supports Windows, but it can be built either on Windows or
-cross-compiled from Linux or WSL. A recent stable Rust toolchain is required.
+The server only supports Windows. It builds with the MSVC toolchain, either on
+Windows or cross-compiled from WSL. A recent stable Rust toolchain is required.
+The default target is `x86_64-pc-windows-msvc`; `i686-pc-windows-msvc` is also
+supported.
 
 On Windows:
 
 ```sh
-cargo build --release -p iscsi-targetd --target x86_64-pc-windows-msvc
+cargo build --release -p iscsi-targetd
 ```
 
-From Linux or WSL, using `cargo cross`. The repository's default build target is
-`i686-pc-windows-gnu`.
+From WSL, the build calls the MSVC linker installed on the Windows side through
+the [msvc-wsl-rust](https://github.com/strickczq/msvc-wsl-rust) scripts. Because
+that setup differs per machine, it lives in your own `~/.cargo/config.toml`, not
+in this repository. The comments in [`.cargo/config.toml`](.cargo/config.toml)
+(in Korean) list the steps and the lines to add. Once that is done:
 
 ```sh
-cargo build-win32
+cargo build-win64     # 64-bit
+cargo build-win32     # 32-bit
 ```
 
-This produces `target/i686-pc-windows-gnu/release/iscsi-targetd.exe`.
+This produces `target/<target>/release/iscsi-targetd.exe`.
 
 The executable needs no extra DLLs or runtime on Windows 10 and 11. To deploy it,
 copy the executable and a configuration file.
@@ -199,8 +205,8 @@ Other documents, all in Korean:
 
 ```sh
 cargo fmt --all -- --check
-cargo cross test --workspace
-cargo cross clippy --workspace --all-targets -- -D warnings
+cargo test-win64
+cargo clippy-win64
 ```
 
 ## License
