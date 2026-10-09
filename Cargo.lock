@@ -137,6 +137,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "iscsi-target-gui"
+version = "0.1.0"
+dependencies = [
+ "iscsi-target-server",
+]
+
+[[package]]
 name = "iscsi-target-server"
 version = "0.1.0"
 dependencies = [
@@ -152,9 +159,20 @@ dependencies = [
  "tokio-util",
  "toml",
  "tracing",
- "tracing-subscriber",
  "windows-sys",
  "zeroize",
+]
+
+[[package]]
+name = "iscsi-targetd"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "iscsi-target-server",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

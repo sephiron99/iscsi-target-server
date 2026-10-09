@@ -34,9 +34,19 @@
 
 먼저 실제로 동작하고 검증된 Target Server를 완성한다. PDU 등 재사용 가능한 core는 나중에 별도 크레이트로 분리할 수 있도록 경계를 유지하지만, 프로젝트 완성 전에는 물리적으로 분리하거나 공개 API를 성급히 고정하지 않는다.
 
+저장소는 Cargo workspace이고 패키지는 셋이다. 실행 파일 둘은 서로를 모르고 같은 라이브러리만 쓴다.
+
+| 패키지 | 종류 | 내용 |
+|---|---|---|
+| `crates/iscsi-target-server` | 라이브러리 | 프로토콜, SCSI, Storage backend, 설정, 관리 API, Tokio 서비스 |
+| `crates/iscsi-targetd` | 실행 파일 | 명령줄 인자, 로그 출력, Ctrl+C. 콘솔에서 foreground로만 실행한다 |
+| `crates/iscsi-target-gui` | 실행 파일 | Windows GUI. 아직 자리만 있고 구현하지 않았다 |
+
+GUI의 의존성은 `iscsi-target-gui`에만 둔다. 라이브러리와 `iscsi-targetd`가 GUI 의존성을 갖게 만들지 않는다. Windows 서비스 등록 같은 background 실행 방식은 고려하지 않는다.
+
 사용자가 명시적으로 요청하지 않는 한 다음 작업을 하지 않는다.
 
-- workspace를 출판 단위의 여러 크레이트로 분리
+- 라이브러리를 wire/SCSI/프로토콜 등 더 작은 출판 단위 크레이트로 분리
 - crates.io 이름 확보를 위한 크레이트 이름 변경
 - 배포만을 위한 메타데이터 추가 및 공개 API 안정화
 - `cargo publish`, release/tag 생성 또는 외부 배포
@@ -58,7 +68,7 @@ protocol core가 Target 설정, 디스크 경로, 로깅 정책, UI, 플랫폼 �
 
 ### iSCSI protocol core
 
-현재는 모든 코드가 `iscsi-target-server` 크레이트 하나에 있다. 그중 wire 형식을 다루는 모듈이 향후 core 크레이트 후보이며 다음과 같은 프로토콜 공통 기능을 둔다.
+프로토콜, SCSI와 서비스 코드는 모두 `iscsi-target-server` 라이브러리 크레이트 하나에 있다. 그중 wire 형식을 다루는 모듈이 향후 core 크레이트 후보이며 다음과 같은 프로토콜 공통 기능을 둔다.
 
 - BHS와 opcode 정의
 - 타입이 있는 PDU 파싱과 직렬화
@@ -180,11 +190,13 @@ sequence number를 구현할 때는 serial number 산술과 wraparound를 명시
 
 ```sh
 cargo fmt --all -- --check
-cargo cross test --no-default-features
-cargo cross test --all-features
-cargo cross clippy --all-targets --all-features -- -D warnings
+cargo cross test -p iscsi-target-server --no-default-features
+cargo cross test --workspace --all-features
+cargo cross clippy --workspace --all-targets --all-features -- -D warnings
 git diff --check
 ```
+
+workspace 전체를 함께 빌드하면 실행 파일 패키지가 라이브러리의 feature를 켜므로, feature 없는 라이브러리는 `-p iscsi-target-server`로 따로 확인한다.
 
 `.cargo/config.toml`의 기본 build target은 `i686-pc-windows-gnu`이다. WSL host에서는 `cargo cross`가 mingw-w64 toolchain을 구성하고 WSL interop으로 Windows test binary를 실행한다. `cargo cross` 없이 `cargo test`를 직접 실행하면 linker를 찾지 못해 실패한다.
 

@@ -184,8 +184,9 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 
 ### 구조
 
+- [x] GUI를 별도 패키지 `crates/iscsi-target-gui`로 분리. workspace는 라이브러리 `iscsi-target-server`, 명령줄 실행 파일 `iscsi-targetd`, GUI 실행 파일 `iscsi-target-gui` 셋이고, 두 실행 파일은 같은 라이브러리만 쓴다. GUI 패키지는 자리만 있고 화면과 기능은 아래 항목에서 구현한다
 - [ ] Windows 전용 binary 또는 module로 격리하고 `#[cfg(windows)]` 적용
-- [ ] `winsafe` 의존성을 Windows target 전용 dependency로 추가
+- [ ] `winsafe` 의존성을 `iscsi-target-gui` 패키지의 Windows target 전용 dependency로 추가
 - [ ] 먼저 `gui` feature만 사용하고 실제 control/API에 필요한 feature만 추가
 - [ ] GUI가 daemon/CLI와 동일한 관리 service API를 사용하도록 구성
 - [ ] WinSafe event loop와 Target async runtime을 분리
@@ -329,9 +330,9 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 
 ```sh
 cargo fmt --all -- --check
-cargo cross test --no-default-features
-cargo cross test --all-features
-cargo cross clippy --all-targets --all-features -- -D warnings
+cargo cross test -p iscsi-target-server --no-default-features
+cargo cross test --workspace --all-features
+cargo cross clippy --workspace --all-targets --all-features -- -D warnings
 git diff --check
 ```
 

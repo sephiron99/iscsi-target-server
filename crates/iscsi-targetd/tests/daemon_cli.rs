@@ -1,4 +1,3 @@
-#![cfg(feature = "daemon")]
 //! daemon CLI 통합 테스트: 실제 `iscsi-targetd` binary를 실행해 설정 검증,
 //! login/logout을 확인한다.
 

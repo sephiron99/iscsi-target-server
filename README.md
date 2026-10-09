@@ -89,7 +89,7 @@ cross-compiled from Linux or WSL. A recent stable Rust toolchain is required.
 On Windows:
 
 ```sh
-cargo build --release --features daemon --target x86_64-pc-windows-msvc
+cargo build --release -p iscsi-targetd --target x86_64-pc-windows-msvc
 ```
 
 From Linux or WSL, using `cargo cross`. The repository's default build target is
@@ -100,9 +100,6 @@ cargo build-win32
 ```
 
 This produces `target/i686-pc-windows-gnu/release/iscsi-targetd.exe`.
-
-The `daemon` feature is required. Without it only the protocol library is built
-and no executable is produced.
 
 The executable needs no extra DLLs or runtime on Windows 10 and 11. To deploy it,
 copy the executable and a configuration file.
@@ -173,12 +170,20 @@ virtual-disk-identity = true
 
 ## Repository layout
 
-All source is in one crate. By role it falls into four layers, and upper layers
-depend on lower ones.
+The repository is a Cargo workspace with three packages. The two executables do
+not depend on each other; both use the library.
+
+| Package | Kind | Contents |
+|---|---|---|
+| `crates/iscsi-target-server` | Library | Protocol, SCSI, storage backends, configuration, management API, Tokio service |
+| `crates/iscsi-targetd` | Executable | Command-line daemon: arguments, log output, Ctrl+C |
+| `crates/iscsi-target-gui` | Executable | Windows GUI. A placeholder; not implemented yet |
+
+By role the library falls into four layers, and upper layers depend on lower ones.
 
 | Layer | Modules |
 |---|---|
-| Daemon and configuration | `main`, `daemon`, `config`, `config_file`, `management`, `target_service`, `connection_io` |
+| Service and configuration | `daemon`, `config`, `config_file`, `management`, `target_service`, `connection_io` |
 | Target protocol state machines | `connection`, `control_state`, `target_login`, `negotiation`, `login_policy`, `auth`, `session`, `serial` |
 | SCSI and storage | `scsi_target`, `disk_identity`, `platform/windows` |
 | Wire format | `lib` (`Pdu`), `frame`, `codec`, `digest`, `bhs`, `opcode`, `login`, `control`, `scsi`, `error` |
@@ -193,9 +198,9 @@ Other documents, all in Korean:
 
 ```sh
 cargo fmt --all -- --check
-cargo cross test --no-default-features
-cargo cross test --all-features
-cargo cross clippy --all-targets --all-features -- -D warnings
+cargo cross test -p iscsi-target-server --no-default-features
+cargo cross test --workspace --all-features
+cargo cross clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
 ## License

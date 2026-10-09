@@ -40,7 +40,7 @@ pub mod config;
 pub mod config_file;
 #[cfg(feature = "codec")]
 pub mod connection_io;
-#[cfg(feature = "daemon")]
+#[cfg(feature = "codec")]
 pub mod daemon;
 #[cfg(feature = "codec")]
 pub mod target_service;

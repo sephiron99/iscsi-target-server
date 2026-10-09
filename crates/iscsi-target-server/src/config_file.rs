@@ -906,7 +906,7 @@ durable-flush = true
         // 않도록 활성화된 LUN은 memory backend 하나여야 한다.
         let directory = TestDirectory::new("sample");
         let path = directory.path("sample.toml");
-        fs::write(&path, include_str!("../sample.toml")).unwrap();
+        fs::write(&path, include_str!("../../../sample.toml")).unwrap();
 
         let config = DaemonConfig::load_from_file(path).unwrap();
         assert_eq!(config.targets().len(), 1);

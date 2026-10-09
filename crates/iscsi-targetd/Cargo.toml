@@ -1,0 +1,20 @@
+[package]
+name = "iscsi-targetd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line iSCSI target daemon for Windows 10/11"
+
+[dependencies]
+iscsi-target-server = { workspace = true, features = ["codec", "tracing"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "ansi",
+    "fmt",
+    "std",
+] }
+
+[dev-dependencies]
+bytes.workspace = true
