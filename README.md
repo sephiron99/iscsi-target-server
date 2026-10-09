@@ -33,8 +33,9 @@ The main differences:
 
 ## Status
 
-This is work in progress. It has not been released, and nothing has been published
-to crates.io.
+This is work in progress. Pre-release builds are on the
+[releases page](https://github.com/sephiron99/iscsi-target-server/releases);
+nothing has been published to crates.io.
 
 Verified on real hardware with the Windows iSCSI Initiator on the same PC:
 
