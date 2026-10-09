@@ -32,6 +32,9 @@ pub mod serial;
 pub mod session;
 pub mod target_login;
 
+#[cfg(test)]
+mod layering;
+
 pub mod codec;
 pub mod config;
 pub mod config_file;

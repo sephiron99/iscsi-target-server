@@ -72,7 +72,7 @@ wire 계층이 Target 설정, 디스크 경로, 로깅 정책, UI, 플랫폼 전
 - 바이트 스트림 frame 인코딩과 디코딩
 - 프로토콜 값 타입과 검증 오류
 
-wire 계층과 프로토콜 상태 머신의 모듈은 async runtime을 직접 쓰지 않는다. Tokio 연동은 `codec`, `connection_io`, `target_service`, `server` 모듈에만 두고, 동일한 frame 구현을 감싸는 방식으로 하며 별도의 프로토콜 구현을 만들지 않는다. 이 경계는 Cargo feature로 강제하지 않으므로 코드 리뷰로 지킨다.
+wire 계층과 프로토콜 상태 머신의 모듈은 async runtime을 직접 쓰지 않는다. Tokio 연동은 `codec`, `connection_io`, `target_service`, `server` 모듈에만 두고, 동일한 frame 구현을 감싸는 방식으로 하며 별도의 프로토콜 구현을 만들지 않는다. 이 경계는 `crates/iscsi-target-server/src/layering.rs`의 테스트가 검사한다. 그 테스트는 Tokio를 쓰는 모듈이 위 넷뿐인지, wire 계층과 SCSI/Storage 계층이 자기 계층 밖의 모듈을 참조하지 않는지 확인한다. 새 모듈을 추가하면 그 파일의 계층 표에 넣어야 하고, 넣지 않으면 테스트가 실패한다.
 
 Login text 파싱은 PDU 가까이에 둔다. 그러나 Target 정책, 응답 값 선택, 인증 정책, Connection/Session 상태, Target discovery와 저장소 설정은 wire 계층에 넣지 않는다.
 
