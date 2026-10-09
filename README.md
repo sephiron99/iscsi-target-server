@@ -95,7 +95,7 @@ cargo build --release -p iscsi-targetd
 ```
 
 From WSL, the build calls the MSVC linker installed on the Windows side through
-the [msvc-wsl-rust](https://github.com/strickczq/msvc-wsl-rust) scripts. Because
+the [msvc-wsl-rust](https://github.com/sephiron99/msvc-wsl-rust) scripts. Because
 that setup differs per machine, it lives in your own `~/.cargo/config.toml`, not
 in this repository. The comments in [`.cargo/config.toml`](.cargo/config.toml)
 (in Korean) list the steps and the lines to add. Once that is done:
