@@ -72,7 +72,7 @@ wire 계층이 Target 설정, 디스크 경로, 로깅 정책, UI, 플랫폼 전
 - 바이트 스트림 frame 인코딩과 디코딩
 - 프로토콜 값 타입과 검증 오류
 
-기본 빌드는 async runtime에 독립적이어야 한다. Tokio 같은 runtime 연동은 동일한 frame 구현을 감싸는 선택적 feature로 제공하며 별도의 프로토콜 구현을 만들지 않는다.
+wire 계층과 프로토콜 상태 머신의 모듈은 async runtime을 직접 쓰지 않는다. Tokio 연동은 `codec`, `connection_io`, `target_service`, `server` 모듈에만 두고, 동일한 frame 구현을 감싸는 방식으로 하며 별도의 프로토콜 구현을 만들지 않는다. 이 경계는 Cargo feature로 강제하지 않으므로 코드 리뷰로 지킨다.
 
 Login text 파싱은 PDU 가까이에 둔다. 그러나 Target 정책, 응답 값 선택, 인증 정책, Connection/Session 상태, Target discovery와 저장소 설정은 wire 계층에 넣지 않는다.
 
@@ -106,7 +106,7 @@ Storage backend는 capacity, block size, read, write, flush, read-only 여부 �
 - control, Login, SCSI PDU 타입
 - AHS를 포함하는 frame 배치와 24-bit data length 처리
 - CRC32C header/data digest, padding 검증과 크기 제한
-- runtime 독립적인 `FrameCodec`과 선택적 Tokio adapter
+- runtime 독립적인 `FrameCodec`과 이를 감싸는 Tokio adapter
 - RFC 기본값을 포함한 송수신 방향별 `MaxRecvDataSegmentLength` 제한
 - 엄격한 Login text 파싱과 조각난 text 누적, digest 협상을 포함한 Target 측 협상 상태
 
@@ -150,7 +150,7 @@ sequence number를 구현할 때는 serial number 산술과 wraparound를 명시
 
 현재 결정은 `Masorubka1/iscsI-client-rs`를 가져오거나 복사하지 않고 로컬 PDU 구현을 계속 사용하는 것이다. 해당 구현은 client 중심의 범위와 API 경계 때문에 이 Target에는 로컬 구현보다 적합하지 않다. 사용자가 명시적으로 재검토를 요청할 때만 최신 기능, 유지보수 상태와 라이선스 호환성을 다시 조사한다.
 
-의존성을 추가하기 전에 어떤 불변식이나 상당한 구현 부담을 대신하는지 설명한다. 작고 감사 가능한 구현이면 불필요한 의존성을 추가하지 않는다. runtime, tracing, 인증과 platform 연동은 보편적으로 필요하지 않으면 feature로 분리한다.
+의존성을 추가하기 전에 어떤 불변식이나 상당한 구현 부담을 대신하는지 설명한다. 작고 감사 가능한 구현이면 불필요한 의존성을 추가하지 않는다.
 
 `unsafe`를 피한다. 플랫폼 I/O나 zero-copy 연동 때문에 꼭 필요하면 안전한 인터페이스 뒤에 격리하고 모든 safety invariant를 문서화하며 집중 테스트를 추가한다. 네트워크나 디스크 입력으로 도달할 수 있는 production 경로에서는 `unwrap`과 `expect`를 사용하지 않는다.
 
@@ -171,13 +171,12 @@ sequence number를 구현할 때는 serial number 산술과 wraparound를 명시
 
 ```sh
 cargo fmt --all -- --check
-cargo cross test -p iscsi-target-server --no-default-features
-cargo cross test --workspace --all-features
-cargo cross clippy --workspace --all-targets --all-features -- -D warnings
+cargo cross test --workspace
+cargo cross clippy --workspace --all-targets -- -D warnings
 git diff --check
 ```
 
-workspace 전체를 함께 빌드하면 실행 파일 패키지가 라이브러리의 feature를 켜므로, feature 없는 라이브러리는 `-p iscsi-target-server`로 따로 확인한다.
+라이브러리에는 Cargo feature가 없다. 전체를 하나로 배포하므로 빌드 형태도 하나만 둔다.
 
 `.cargo/config.toml`의 기본 build target은 `i686-pc-windows-gnu`이다. WSL host에서는 `cargo cross`가 mingw-w64 toolchain을 구성하고 WSL interop으로 Windows test binary를 실행한다. `cargo cross` 없이 `cargo test`를 직접 실행하면 linker를 찾지 못해 실패한다.
 

@@ -198,9 +198,8 @@ Other documents, all in Korean:
 
 ```sh
 cargo fmt --all -- --check
-cargo cross test -p iscsi-target-server --no-default-features
-cargo cross test --workspace --all-features
-cargo cross clippy --workspace --all-targets --all-features -- -D warnings
+cargo cross test --workspace
+cargo cross clippy --workspace --all-targets -- -D warnings
 ```
 
 ## License

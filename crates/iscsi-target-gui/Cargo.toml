@@ -3,8 +3,9 @@ name = "iscsi-target-gui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Windows GUI for the iSCSI target server (not implemented yet)"
 
 [dependencies]
 # GUI는 명령줄 server와 같은 라이브러리 API로 서버를 띄우고 관리한다.
-iscsi-target-server = { workspace = true, features = ["codec", "tracing"] }
+iscsi-target-server.workspace = true

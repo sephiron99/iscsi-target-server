@@ -370,52 +370,37 @@ fn disk_offline_request(offline: bool) -> Result<SET_DISK_ATTRIBUTES, StorageErr
 }
 
 fn log_disk_going_offline(device_number: u32) {
-    #[cfg(feature = "tracing")]
     tracing::warn!(
         device_number,
         "physical disk를 offline으로 전환한다. serve하는 동안 이 PC에서 해당 disk의 volume에 접근할 수 없고, 종료하면 online으로 되돌린다"
     );
-    #[cfg(not(feature = "tracing"))]
-    let _ = device_number;
 }
 
 fn log_disk_already_offline(device_number: u32) {
-    #[cfg(feature = "tracing")]
     tracing::info!(
         device_number,
         "physical disk가 이미 offline이다. 상태를 바꾸지 않으며 종료 시에도 그대로 둔다"
     );
-    #[cfg(not(feature = "tracing"))]
-    let _ = device_number;
 }
 
 fn log_disk_offline_unavailable(device_number: u32, error: &StorageError) {
-    #[cfg(feature = "tracing")]
     tracing::warn!(
         device_number,
         %error,
         "physical disk를 offline으로 전환하지 못했다. online 상태로 serve하므로 이 PC에서 해당 disk의 volume을 사용하지 말아야 한다"
     );
-    #[cfg(not(feature = "tracing"))]
-    let _ = (device_number, error);
 }
 
 fn log_disk_restored_online(device_number: u32) {
-    #[cfg(feature = "tracing")]
     tracing::info!(device_number, "physical disk를 online으로 되돌렸다");
-    #[cfg(not(feature = "tracing"))]
-    let _ = device_number;
 }
 
 fn log_disk_online_restore_failed(device_number: u32, error: &StorageError) {
-    #[cfg(feature = "tracing")]
     tracing::warn!(
         device_number,
         %error,
         "physical disk를 online으로 되돌리지 못했다. 디스크 관리나 재부팅으로 복원해야 한다"
     );
-    #[cfg(not(feature = "tracing"))]
-    let _ = (device_number, error);
 }
 
 /// 대상 physical disk 위의 mounted volume을 모두 lock/dismount하고 handle을 반환한다.

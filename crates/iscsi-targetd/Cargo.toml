@@ -3,10 +3,11 @@ name = "iscsi-targetd"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Command-line iSCSI target server for Windows 10/11"
 
 [dependencies]
-iscsi-target-server = { workspace = true, features = ["codec", "tracing"] }
+iscsi-target-server.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
 tracing.workspace = true

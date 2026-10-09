@@ -24,7 +24,7 @@
 - 고정 48-byte BHS와 opcode별 PDU 표현
 - control, Login, SCSI PDU 파싱과 직렬화
 - AHS, padding, CRC32C Header/Data Digest를 포함한 frame codec
-- runtime 독립적인 `FrameCodec`과 선택적 Tokio codec
+- runtime 독립적인 `FrameCodec`과 이를 감싸는 Tokio codec
 - 송수신 방향별 data segment 크기 제한
 - Login text parsing과 Target 측 frame parameter 협상
 
@@ -37,7 +37,7 @@
 - [x] Digest와 `MaxRecvDataSegmentLength` 협상 결과가 성공 시점에만 원자적으로 적용되는지 확인
 - [x] 오류 타입과 공개 API 이름 검토
 
-- [x] no-default/all-features 테스트, clippy와 format 검증
+- [x] 테스트, clippy와 format 검증
 - [x] 현재 변경을 하나의 집중된 commit으로 정리
 
 완료 조건:
@@ -314,16 +314,15 @@ crates.io에는 올리지 않고 GitHub release의 실행 파일로 배포한다
 
 ```sh
 cargo fmt --all -- --check
-cargo cross test -p iscsi-target-server --no-default-features
-cargo cross test --workspace --all-features
-cargo cross clippy --workspace --all-targets --all-features -- -D warnings
+cargo cross test --workspace
+cargo cross clippy --workspace --all-targets -- -D warnings
 git diff --check
 ```
 
 `.cargo/config.toml`의 기본 build target은 `i686-pc-windows-gnu`이다. WSL host에서는 `cargo cross`가 mingw-w64 toolchain을 구성하고 WSL interop으로 Windows test binary를 실행한다. `cargo cross` 없이 `cargo test`를 직접 실행하면 linker를 찾지 못해 실패한다.
 
 Windows GUI가 추가된 뒤에는 Windows runner에서 GUI target의 build/check도 필수 검증에 포함한다.
-Windows storage backend는 GUI 도입 전부터 `windows-latest` runner에서 all-features test와 clippy를 실행한다.
+Windows storage backend는 GUI 도입 전부터 `windows-latest` runner에서 test와 clippy를 실행한다.
 
 ## 참고 자료
 

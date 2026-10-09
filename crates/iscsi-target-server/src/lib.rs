@@ -32,17 +32,11 @@ pub mod serial;
 pub mod session;
 pub mod target_login;
 
-// codec은 tokio-util 의존성이 필요하므로 feature로 분리.
-// 순수 PDU 파싱/직렬화만 쓰는 경우 Tokio 의존성 없이 사용 가능.
-#[cfg(feature = "codec")]
 pub mod codec;
 pub mod config;
 pub mod config_file;
-#[cfg(feature = "codec")]
 pub mod connection_io;
-#[cfg(feature = "codec")]
 pub mod server;
-#[cfg(feature = "codec")]
 pub mod target_service;
 
 pub use auth::{ChapCredentials, ChapError, ChapExchange};
@@ -58,7 +52,6 @@ pub use connection::{
     ConnectionCloseReason, ConnectionError, ConnectionOutput, ConnectionPhase,
     ConnectionStateMachine, ConnectionTimeoutKind, ConnectionTimeouts,
 };
-#[cfg(feature = "codec")]
 pub use connection_io::{
     BlockingStorageExecutor, BlockingStorageExecutorError, ConnectionIoError,
     DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS, run_connection, run_connection_with_executor,
@@ -95,7 +88,6 @@ pub use session::{
 pub use target_login::{
     NegotiatedDataParameters, TargetLoginError, TargetLoginOutcome, TargetLoginProcessor,
 };
-#[cfg(feature = "codec")]
 pub use target_service::{
     TargetService, TargetServiceConfig, TargetServiceError, TargetServiceHandle,
     TargetServiceSummary,

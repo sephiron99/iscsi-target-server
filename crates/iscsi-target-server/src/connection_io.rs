@@ -1,4 +1,4 @@
-//! 선택적 Tokio stream adapter for [`ConnectionStateMachine`].
+//! Tokio stream adapter for [`ConnectionStateMachine`].
 
 use std::sync::Arc;
 

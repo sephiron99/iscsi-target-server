@@ -3,6 +3,7 @@ name = "iscsi-target-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "User-space iSCSI target server for Windows 10/11 (RFC 7143)"
 
 [dependencies]
@@ -16,11 +17,9 @@ thiserror.workspace = true
 zeroize = "1.8"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.3"
-# codec feature에서만 사용
-tokio-util = { version = "0.7", features = ["codec"], optional = true }
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"], optional = true }
-# tracing feature에서만 사용
-tracing = { workspace = true, optional = true }
+tokio-util = { version = "0.7", features = ["codec"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -29,13 +28,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_IO",
     "Win32_System_Ioctl",
 ] }
-
-[features]
-default = []
-# Tokio로 실제 TCP 접속을 처리한다: codec, connection_io, target_service, server 모듈
-codec = ["dep:tokio-util", "dep:tokio"]
-# 구조화된 tracing event 계측
-tracing = ["dep:tracing"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

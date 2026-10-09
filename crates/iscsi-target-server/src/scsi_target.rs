@@ -971,7 +971,6 @@ fn storage_error(error: StorageError) -> ScsiExecution {
 // data payload는 어떤 레벨에서도 기록하지 않는다.
 
 /// 로그에 쓸 LUN 표기. LUN 번호로 풀리면 그 번호, 아니면 8-byte 값 그대로이다.
-#[cfg(feature = "tracing")]
 fn lun_label(wire: u64) -> String {
     match decode_lun(wire) {
         Some(number) => number.to_string(),
@@ -980,7 +979,6 @@ fn lun_label(wire: u64) -> String {
 }
 
 fn log_command(lun: u64, cdb: &[u8; 16], result: &ScsiExecution) {
-    #[cfg(feature = "tracing")]
     tracing::trace!(
         lun = lun_label(lun),
         opcode = format_args!("{:#04x}", cdb[0]),
@@ -990,14 +988,11 @@ fn log_command(lun: u64, cdb: &[u8; 16], result: &ScsiExecution) {
         data_in_length = result.data.len(),
         "SCSI 명령을 실행했다"
     );
-    #[cfg(not(feature = "tracing"))]
-    let _ = (lun, cdb, result);
 }
 
 fn log_check_condition(lun: u64, cdb: &[u8; 16], sense: &[u8]) {
     // read-only LUN에 대한 write는 Initiator 쪽에서 조용히 실패할 수 있으므로 기본 로그
     // 레벨에서도 보이게 한다.
-    #[cfg(feature = "tracing")]
     if sense.get(2).copied().unwrap_or(0) & 0x0f == SENSE_DATA_PROTECT {
         tracing::warn!(
             lun = lun_label(lun),
@@ -1007,7 +1002,6 @@ fn log_check_condition(lun: u64, cdb: &[u8; 16], sense: &[u8]) {
         );
         return;
     }
-    #[cfg(feature = "tracing")]
     tracing::debug!(
         lun = lun_label(lun),
         opcode = format_args!("{:#04x}", cdb[0]),
@@ -1018,12 +1012,9 @@ fn log_check_condition(lun: u64, cdb: &[u8; 16], sense: &[u8]) {
         ascq = format_args!("{:#04x}", sense.get(13).copied().unwrap_or(0)),
         "SCSI 명령이 CHECK CONDITION으로 끝났다"
     );
-    #[cfg(not(feature = "tracing"))]
-    let _ = (lun, cdb, sense);
 }
 
 /// READ/WRITE (10/12/16) CDB의 시작 LBA.
-#[cfg(feature = "tracing")]
 fn cdb_lba(cdb: &[u8; 16]) -> Option<u64> {
     match cdb[0] {
         0x28 | 0x2a | 0xa8 | 0xaa => Some(u64::from(be_u32(cdb, 2))),
@@ -1033,7 +1024,6 @@ fn cdb_lba(cdb: &[u8; 16]) -> Option<u64> {
 }
 
 /// INQUIRY와 MODE SENSE (6/10) CDB의 page code.
-#[cfg(feature = "tracing")]
 fn cdb_page_code(cdb: &[u8; 16]) -> Option<u8> {
     match cdb[0] {
         0x12 => Some(cdb[2]),
@@ -1043,10 +1033,7 @@ fn cdb_page_code(cdb: &[u8; 16]) -> Option<u8> {
 }
 
 fn log_storage_io_error(error: &StorageIoError) {
-    #[cfg(feature = "tracing")]
     tracing::warn!(%error, "Storage backend I/O 오류를 MEDIUM ERROR로 보고한다");
-    #[cfg(not(feature = "tracing"))]
-    let _ = error;
 }
 
 fn check_condition(key: u8, asc: u8, ascq: u8) -> ScsiExecution {

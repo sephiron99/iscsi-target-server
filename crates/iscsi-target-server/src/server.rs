@@ -1,4 +1,4 @@
-//! 설정 하나로 Target service를 띄우고 내리는 계층 (feature `codec`).
+//! 설정 하나로 Target service를 띄우고 내리는 계층.
 //!
 //! 명령줄 server와 GUI가 함께 쓰는 진입점이다. 인자 처리, 로그 출력 설정, 종료 신호
 //! 같은 실행 파일의 일은 여기에 두지 않는다.
@@ -56,10 +56,7 @@ impl Server {
             factory_api
                 .create_connection(&bound_target, tsih, SERVER_COMMAND_WINDOW)
                 .map_err(|error| {
-                    #[cfg(feature = "tracing")]
                     tracing::warn!(%peer, %error, "connection setup failed");
-                    #[cfg(not(feature = "tracing"))]
-                    let _ = (peer, error);
                     ConnectionError::ServiceUnavailable
                 })
         });
@@ -92,7 +89,6 @@ impl Server {
         let summary = tokio::select! {
             finished = &mut service_task => finished.map_err(TargetServiceError::from)??,
             () = &mut shutdown => {
-                #[cfg(feature = "tracing")]
                 tracing::info!("shutdown requested");
                 let _ = sender.send(true);
                 (&mut service_task).await.map_err(TargetServiceError::from)??

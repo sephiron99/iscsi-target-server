@@ -20,11 +20,7 @@ jobs:
         run: cargo fmt --all -- --check
       # .cargo/config.toml의 기본 target(i686-pc-windows-gnu)은 runner에 mingw-w64
       # toolchain이 없어 쓸 수 없으므로 runner의 MSVC target을 명시한다.
-      # workspace 전체를 함께 빌드하면 실행 파일 패키지가 라이브러리의 feature를 켜므로,
-      # feature 없는 라이브러리는 패키지를 지정해 따로 확인한다.
-      - name: Test library without default features
-        run: cargo test -p iscsi-target-server --no-default-features --target x86_64-pc-windows-msvc
-      - name: Test workspace with all features
-        run: cargo test --workspace --all-features --target x86_64-pc-windows-msvc
+      - name: Test
+        run: cargo test --workspace --target x86_64-pc-windows-msvc
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features --target x86_64-pc-windows-msvc -- -D warnings
+        run: cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings

@@ -10,10 +10,12 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
+# crates.io에 올리지 않는다. 배포는 GitHub release의 실행 파일로 한다.
+publish = false
 
 [workspace.dependencies]
-# workspace 안의 패키지. publish하려면 path와 함께 version이 있어야 한다.
-iscsi-target-server = { path = "crates/iscsi-target-server", version = "0.1.0" }
+# workspace 안의 패키지
+iscsi-target-server = { path = "crates/iscsi-target-server" }
 
 bytes = "1"
 thiserror = "2"

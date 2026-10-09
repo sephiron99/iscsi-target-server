@@ -260,45 +260,27 @@ fn record_completion(
 // wire payload는 어떤 레벨에서도 기록하지 않는다.
 
 fn log_connection_accepted(peer: SocketAddr) {
-    #[cfg(feature = "tracing")]
     tracing::info!(%peer, "connection accepted");
-    #[cfg(not(feature = "tracing"))]
-    let _ = peer;
 }
 
 fn log_connection_rejected(peer: SocketAddr, error: &ConnectionError) {
-    #[cfg(feature = "tracing")]
     tracing::warn!(%peer, %error, "connection setup rejected");
-    #[cfg(not(feature = "tracing"))]
-    let _ = (peer, error);
 }
 
 fn log_connection_closed(peer: SocketAddr, reason: ConnectionCloseReason) {
-    #[cfg(feature = "tracing")]
     tracing::info!(%peer, ?reason, "connection closed");
-    #[cfg(not(feature = "tracing"))]
-    let _ = (peer, reason);
 }
 
 fn log_connection_failed(peer: SocketAddr, error: &ConnectionIoError) {
-    #[cfg(feature = "tracing")]
     tracing::warn!(%peer, %error, "connection failed");
-    #[cfg(not(feature = "tracing"))]
-    let _ = (peer, error);
 }
 
 fn log_connection_panicked(error: &tokio::task::JoinError) {
-    #[cfg(feature = "tracing")]
     tracing::error!(%error, "connection task panicked");
-    #[cfg(not(feature = "tracing"))]
-    let _ = error;
 }
 
 fn log_service_stopping(active_connections: usize) {
-    #[cfg(feature = "tracing")]
     tracing::info!(active_connections, "service stopping; draining connections");
-    #[cfg(not(feature = "tracing"))]
-    let _ = active_connections;
 }
 
 #[derive(Debug, thiserror::Error)]
