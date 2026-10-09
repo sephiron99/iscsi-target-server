@@ -70,8 +70,7 @@
   - LoginOperationalNegotiation
   - FullFeaturePhase
   - Logout/Closed
-- [x] ISID, TSIH, CID와 connection reinstatement 규칙
-- [x] Session 생성, 조회, 종료와 자원 상한
+- [x] Session 지원 범위 결정: TCP 연결 하나가 Session 하나이다. TSIH는 연결마다 새로 발급한다. Session reinstatement, 기존 TSIH에 connection을 추가하는 것과 Session 단위 상한은 지원하지 않고, 연결 수는 `max-connections`로만 제한한다. `MaxConnections=1`과 ERL 0에서는 끊기면 새로 Login하는 흐름으로 충분하다. Initiator가 끊긴 줄 모르고 다시 Login하면 이전 연결은 idle timeout(NOP 확인 포함 최대 약 4분) 뒤에 정리된다
 - [x] `CmdSN`, `ExpCmdSN`, `MaxCmdSN`, `StatSN`, `ExpStatSN` 관리
 - [x] serial number wraparound 비교와 command window 검증
 - [x] timeout, protocol error와 transport error에 따른 종료 정책

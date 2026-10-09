@@ -44,7 +44,6 @@ const PROTOCOL_AND_CONFIGURATION: &[Module] = &[
     module!("login_policy"),
     module!("negotiation"),
     module!("target_login"),
-    module!("session"),
     module!("serial"),
     module!("control_state"),
     module!("connection"),

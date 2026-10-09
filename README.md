@@ -167,6 +167,7 @@ virtual-disk-identity = true
 - No VHD or VMDK support.
 - No GUI and no Windows service integration.
 - Error recovery level 0 only, and one connection per session.
+- No session reinstatement. Each TCP connection is its own session.
 
 ## Repository layout
 
@@ -184,7 +185,7 @@ By role the library falls into four layers, and upper layers depend on lower one
 | Layer | Modules |
 |---|---|
 | Service and configuration | `server`, `config`, `config_file`, `management`, `target_service`, `connection_io` |
-| Target protocol state machines | `connection`, `control_state`, `target_login`, `negotiation`, `login_policy`, `auth`, `session`, `serial` |
+| Target protocol state machines | `connection`, `control_state`, `target_login`, `negotiation`, `login_policy`, `auth`, `serial` |
 | SCSI and storage | `scsi_target`, `disk_identity`, `platform/windows` |
 | Wire format | `lib` (`Pdu`), `frame`, `codec`, `digest`, `bhs`, `opcode`, `login`, `control`, `scsi`, `error` |
 

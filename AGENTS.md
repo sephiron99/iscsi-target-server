@@ -83,7 +83,7 @@ Target 계층은 다음 책임을 갖는다.
 - Connection 수락과 수명주기 관리
 - Login, Text, Logout, NOP, Reject, task management 처리
 - Login 응답 정책과 Full Feature Phase 전환
-- Session 식별, 복구, 명령 수명주기와 sequence number 관리
+- 명령 수명주기와 sequence number 관리. TCP 연결 하나가 Session 하나이며 Session reinstatement는 지원하지 않는다
 - iSCSI 명령을 SCSI 실행으로 연결
 - Target discovery와 LUN 노출
 - timeout, recovery와 연결 종료 정책

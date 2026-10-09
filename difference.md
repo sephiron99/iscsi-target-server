@@ -28,7 +28,7 @@ InitiatorName/ISID/endpoint 기반 허용·거부 훅만 제공한다.
 | Login 파라미터 협상                    | 있음                                                        | 있음                                                  |
 | Discovery `SendTargets`                | 있음 (`ISCSIServer.TextRequest.cs`)                         | 있음                                                  |
 | discovery session 명령 제한            | 있음 (Reject)                                               | 있음                                                  |
-| Session/Connection reinstatement       | 있음 (`ISCSIServer.Login.cs`)                               | 있음                                                  |
+| Session/Connection reinstatement       | 있음 (`ISCSIServer.Login.cs`)                               | 없음 (연결과 Session 1:1, 의도적 차이)                |
 | NOP keepalive (target발 probe)         | 있음 (`ConnectionManager.SendKeepAlive`)                    | 있음 (idle timeout 기반)                              |
 | Task Management                        | **PDU 타입 자체가 없음** — 일반 Reject(CommandNotSupported) | Request/Response 기본 기능                            |
 | Async Message                          | PDU 타입 없음                                               | 타입 있는 PDU                                         |

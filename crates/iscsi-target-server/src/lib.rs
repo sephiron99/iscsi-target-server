@@ -29,7 +29,6 @@ pub mod platform;
 pub mod scsi;
 pub mod scsi_target;
 pub mod serial;
-pub mod session;
 pub mod target_login;
 
 #[cfg(test)]
@@ -84,10 +83,6 @@ pub use scsi_target::{
     StorageIoOperation,
 };
 pub use serial::{SequenceError, SequenceState, SerialNumber32};
-pub use session::{
-    Session, SessionBinding, SessionError, SessionId, SessionIdentity, SessionRegistry,
-    SessionRegistryLimits,
-};
 pub use target_login::{
     NegotiatedDataParameters, TargetLoginError, TargetLoginOutcome, TargetLoginProcessor,
 };
