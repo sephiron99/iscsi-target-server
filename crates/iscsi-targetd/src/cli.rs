@@ -3,12 +3,12 @@
 use std::path::PathBuf;
 
 pub const USAGE: &str = "\
-사용법: iscsi-targetd --config <경로> [--check] [--log-level <레벨>]
+Usage: iscsi-targetd --config <PATH> [--check] [--log-level <LEVEL>]
 
-  --config <경로>     TOML 설정 파일 경로 (필수)
-  --check             설정 파일만 검증하고 종료한다
-  --log-level <레벨>  trace, debug, info, warn, error 중 하나 (기본 info)
-  --help              이 도움말을 출력한다
+  --config <PATH>      Path to the TOML configuration file (required)
+  --check              Validate the configuration file and exit
+  --log-level <LEVEL>  One of trace, debug, info, warn, error (default: info)
+  --help               Print this help
 ";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,15 +99,15 @@ where
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum UsageError {
-    #[error("--config <경로> 인자가 필요하다")]
+    #[error("the --config <PATH> argument is required")]
     MissingConfigPath,
-    #[error("{0} 인자의 값이 없다")]
+    #[error("{0} requires a value")]
     MissingValue(&'static str),
-    #[error("{0} 인자가 중복되었다")]
+    #[error("{0} was given more than once")]
     DuplicateOption(&'static str),
-    #[error("알 수 없는 로그 레벨: {0:?}")]
+    #[error("unknown log level: {0:?}")]
     InvalidLogLevel(String),
-    #[error("알 수 없는 인자: {0:?}")]
+    #[error("unknown argument: {0:?}")]
     UnknownArgument(String),
 }
 

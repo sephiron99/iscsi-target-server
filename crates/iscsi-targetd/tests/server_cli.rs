@@ -105,7 +105,7 @@ fn check_validates_configuration_without_serving() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("설정 검증 성공"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("configuration is valid"));
 }
 
 #[test]

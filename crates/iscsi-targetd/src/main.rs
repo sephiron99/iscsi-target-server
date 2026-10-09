@@ -20,7 +20,7 @@ fn main() -> ExitCode {
         }
         Ok(CliCommand::Run(options)) => options,
         Err(error) => {
-            eprintln!("인자 오류: {error}\n\n{}", cli::USAGE);
+            eprintln!("argument error: {error}\n\n{}", cli::USAGE);
             return ExitCode::FAILURE;
         }
     };
@@ -30,19 +30,19 @@ fn main() -> ExitCode {
         .with_writer(std::io::stderr)
         .try_init()
     {
-        eprintln!("로그 초기화 실패: {error}");
+        eprintln!("failed to initialize logging: {error}");
         return ExitCode::FAILURE;
     }
 
     let config = match ServerConfig::load_from_file(&options.config_path) {
         Ok(config) => config,
         Err(error) => {
-            tracing::error!(path = %options.config_path.display(), %error, "설정을 읽지 못했다");
+            tracing::error!(path = %options.config_path.display(), %error, "could not load the configuration");
             return ExitCode::FAILURE;
         }
     };
     if options.check_only {
-        println!("설정 검증 성공: {}", options.config_path.display());
+        println!("configuration is valid: {}", options.config_path.display());
         return ExitCode::SUCCESS;
     }
 
@@ -52,7 +52,7 @@ fn main() -> ExitCode {
     {
         Ok(runtime) => runtime,
         Err(error) => {
-            tracing::error!(%error, "Tokio runtime을 만들지 못했다");
+            tracing::error!(%error, "could not create the Tokio runtime");
             return ExitCode::FAILURE;
         }
     };
@@ -64,11 +64,11 @@ fn main() -> ExitCode {
             .map_err(TargetServiceError::from)
             .map_err(ServerError::from)?;
         println!("listening {address}");
-        tracing::info!(%address, "Target service 시작");
+        tracing::info!(%address, "Target service started");
         server
             .run(async {
                 if let Err(error) = cli::shutdown_signal().await {
-                    tracing::error!(%error, "signal handler를 등록하지 못해 종료한다");
+                    tracing::error!(%error, "could not register the signal handler; shutting down");
                 }
             })
             .await
@@ -81,12 +81,12 @@ fn main() -> ExitCode {
                 completed = summary.completed_connections,
                 failed = summary.failed_connections,
                 aborted = summary.aborted_connections,
-                "정상 종료"
+                "shut down cleanly"
             );
             ExitCode::SUCCESS
         }
         Err(error) => {
-            tracing::error!(%error, "server 오류로 종료한다");
+            tracing::error!(%error, "exiting on a server error");
             ExitCode::FAILURE
         }
     }

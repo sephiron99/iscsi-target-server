@@ -986,7 +986,7 @@ fn log_command(lun: u64, cdb: &[u8; 16], result: &ScsiExecution) {
         page = cdb_page_code(cdb).map(|page| format!("{page:#04x}")),
         status = format_args!("{:#04x}", result.status),
         data_in_length = result.data.len(),
-        "SCSI 명령을 실행했다"
+        "SCSI command executed"
     );
 }
 
@@ -998,7 +998,7 @@ fn log_check_condition(lun: u64, cdb: &[u8; 16], sense: &[u8]) {
             lun = lun_label(lun),
             opcode = format_args!("{:#04x}", cdb[0]),
             lba = cdb_lba(cdb),
-            "read-only LUN에 대한 write 요청을 거부했다"
+            "rejected a write to a read-only LUN"
         );
         return;
     }
@@ -1010,7 +1010,7 @@ fn log_check_condition(lun: u64, cdb: &[u8; 16], sense: &[u8]) {
         sense_key = format_args!("{:#04x}", sense.get(2).copied().unwrap_or(0) & 0x0f),
         asc = format_args!("{:#04x}", sense.get(12).copied().unwrap_or(0)),
         ascq = format_args!("{:#04x}", sense.get(13).copied().unwrap_or(0)),
-        "SCSI 명령이 CHECK CONDITION으로 끝났다"
+        "SCSI command ended with CHECK CONDITION"
     );
 }
 
@@ -1033,7 +1033,7 @@ fn cdb_page_code(cdb: &[u8; 16]) -> Option<u8> {
 }
 
 fn log_storage_io_error(error: &StorageIoError) {
-    tracing::warn!(%error, "Storage backend I/O 오류를 MEDIUM ERROR로 보고한다");
+    tracing::warn!(%error, "storage backend I/O error reported as MEDIUM ERROR");
 }
 
 fn check_condition(key: u8, asc: u8, ascq: u8) -> ScsiExecution {

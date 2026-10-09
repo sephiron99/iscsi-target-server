@@ -6,6 +6,6 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    eprintln!("iscsi-target-gui는 아직 구현되지 않았다. iscsi-targetd를 사용한다.");
+    eprintln!("iscsi-target-gui is not implemented yet. Use iscsi-targetd.");
     ExitCode::FAILURE
 }

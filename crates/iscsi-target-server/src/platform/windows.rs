@@ -372,14 +372,14 @@ fn disk_offline_request(offline: bool) -> Result<SET_DISK_ATTRIBUTES, StorageErr
 fn log_disk_going_offline(device_number: u32) {
     tracing::warn!(
         device_number,
-        "physical disk를 offline으로 전환한다. serve하는 동안 이 PC에서 해당 disk의 volume에 접근할 수 없고, 종료하면 online으로 되돌린다"
+        "taking the physical disk offline; its volumes are unavailable on this PC while it is served, and it is brought back online on exit"
     );
 }
 
 fn log_disk_already_offline(device_number: u32) {
     tracing::info!(
         device_number,
-        "physical disk가 이미 offline이다. 상태를 바꾸지 않으며 종료 시에도 그대로 둔다"
+        "the physical disk is already offline; leaving it as it is, also on exit"
     );
 }
 
@@ -387,19 +387,19 @@ fn log_disk_offline_unavailable(device_number: u32, error: &StorageError) {
     tracing::warn!(
         device_number,
         %error,
-        "physical disk를 offline으로 전환하지 못했다. online 상태로 serve하므로 이 PC에서 해당 disk의 volume을 사용하지 말아야 한다"
+        "could not take the physical disk offline; serving it while online, so do not use its volumes on this PC"
     );
 }
 
 fn log_disk_restored_online(device_number: u32) {
-    tracing::info!(device_number, "physical disk를 online으로 되돌렸다");
+    tracing::info!(device_number, "physical disk brought back online");
 }
 
 fn log_disk_online_restore_failed(device_number: u32, error: &StorageError) {
     tracing::warn!(
         device_number,
         %error,
-        "physical disk를 online으로 되돌리지 못했다. 디스크 관리나 재부팅으로 복원해야 한다"
+        "could not bring the physical disk back online; restore it with Disk Management or a reboot"
     );
 }
 

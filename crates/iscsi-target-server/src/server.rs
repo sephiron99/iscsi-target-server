@@ -102,7 +102,7 @@ impl Server {
 pub enum ServerError {
     #[error(transparent)]
     Config(#[from] ConfigError),
-    #[error("server는 단일 Target 설정만 지원한다; {0}개가 설정되었다")]
+    #[error("the server supports exactly one Target; {0} are configured")]
     MultipleTargetsUnsupported(usize),
     #[error(transparent)]
     Management(#[from] ManagementError),
