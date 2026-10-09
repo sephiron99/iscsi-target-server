@@ -32,7 +32,7 @@
 
 ## 완료와 배포 원칙
 
-먼저 실제로 동작하고 검증된 Target Server를 완성한다. PDU 등 재사용 가능한 core는 나중에 별도 크레이트로 분리할 수 있도록 경계를 유지하지만, 프로젝트 완성 전에는 물리적으로 분리하거나 공개 API를 성급히 고정하지 않는다.
+먼저 실제로 동작하고 검증된 Target Server를 완성한다. 이 프로젝트는 전체를 하나의 단위로 배포한다. PDU 파싱 같은 부분을 별도 크레이트로 떼어 공개하지 않고, crates.io에도 올리지 않는다. 배포는 GitHub release의 실행 파일로 한다.
 
 저장소는 Cargo workspace이고 패키지는 셋이다. 실행 파일 둘은 서로를 모르고 같은 라이브러리만 쓴다.
 
@@ -44,14 +44,10 @@
 
 GUI의 의존성은 `iscsi-target-gui`에만 둔다. 라이브러리와 `iscsi-targetd`가 GUI 의존성을 갖게 만들지 않는다. Windows 서비스 등록 같은 background 실행 방식은 고려하지 않는다.
 
-사용자가 명시적으로 요청하지 않는 한 다음 작업을 하지 않는다.
+배포와 관련해 다음을 지킨다.
 
-- 라이브러리를 wire/SCSI/프로토콜 등 더 작은 출판 단위 크레이트로 분리
-- crates.io 이름 확보를 위한 크레이트 이름 변경
-- 배포만을 위한 메타데이터 추가 및 공개 API 안정화
-- `cargo publish`, release/tag 생성 또는 외부 배포
-
-`cargo publish`는 서버의 end-to-end 동작, Initiator 상호운용성, 보안 강화, 문서화, API 검토, 라이선스 결정을 모두 마친 뒤 사용자의 명시적 승인으로 수행하는 마지막 과정이다.
+- `cargo publish`를 하지 않는다. crates.io 공개를 전제로 한 크레이트 분리, 이름 변경과 metadata 추가도 하지 않는다.
+- 사용자가 명시적으로 요청하지 않으면 release나 tag를 만들거나 외부에 배포하지 않는다.
 
 ## 목표 아키텍처
 
@@ -61,14 +57,14 @@ GUI의 의존성은 `iscsi-target-gui`에만 둔다. 라이브러리와 `iscsi-t
 애플리케이션 / CLI / 관리 기능
     -> Target 서비스 / Connection / Session
         -> SCSI Target / Storage backend 인터페이스
-        -> 재사용 가능한 iSCSI protocol core
+        -> iSCSI wire 계층
 ```
 
-protocol core가 Target 설정, 디스크 경로, 로깅 정책, UI, 플랫폼 전용 저장소 코드에 의존하게 만들지 않는다.
+wire 계층이 Target 설정, 디스크 경로, 로깅 정책, UI, 플랫폼 전용 저장소 코드에 의존하게 만들지 않는다. 이 계층들을 따로 공개하지는 않지만, 코드를 이해하고 계층별로 테스트할 수 있도록 경계를 지킨다.
 
-### iSCSI protocol core
+### Wire 계층
 
-프로토콜, SCSI와 서비스 코드는 모두 `iscsi-target-server` 라이브러리 크레이트 하나에 있다. 그중 wire 형식을 다루는 모듈이 향후 core 크레이트 후보이며 다음과 같은 프로토콜 공통 기능을 둔다.
+프로토콜, SCSI와 서비스 코드는 모두 `iscsi-target-server` 라이브러리 크레이트 하나에 있다. 그중 wire 형식을 다루는 모듈에는 다음과 같은 프로토콜 공통 기능을 둔다.
 
 - BHS와 opcode 정의
 - 타입이 있는 PDU 파싱과 직렬화
@@ -78,7 +74,7 @@ protocol core가 Target 설정, 디스크 경로, 로깅 정책, UI, 플랫폼 �
 
 기본 빌드는 async runtime에 독립적이어야 한다. Tokio 같은 runtime 연동은 동일한 frame 구현을 감싸는 선택적 feature로 제공하며 별도의 프로토콜 구현을 만들지 않는다.
 
-개발 중에는 Login text 파싱과 협상 메커니즘을 PDU 가까이에 둘 수 있다. 그러나 Target 정책, 응답 값 선택, 인증 정책, Connection/Session 상태, Target discovery와 저장소 설정은 최종 저수준 PDU 크레이트에 포함하지 않는다.
+Login text 파싱은 PDU 가까이에 둔다. 그러나 Target 정책, 응답 값 선택, 인증 정책, Connection/Session 상태, Target discovery와 저장소 설정은 wire 계층에 넣지 않는다.
 
 ### Target 서비스
 
@@ -102,24 +98,9 @@ Storage backend는 capacity, block size, read, write, flush, read-only 여부 �
 
 원본 Windows Forms UI는 기능과 작업 흐름의 참고 자료이지 Rust UI 구조의 요구사항이 아니다. 정확한 라이브러리와 Target 서비스를 먼저 만들고 CLI 또는 관리 기능을 그 위에 구성한다.
 
-## 향후 core 크레이트 분리 기준
-
-다음 조건을 모두 만족할 때 별도 공개 크레이트 후보로 본다.
-
-1. 특정 애플리케이션 정책이 아닌 프로토콜 공통 기능이다.
-2. 둘 이상의 소비자가 재사용할 수 있고, 가능한 경우 Initiator와 Target 양쪽에서 쓸 수 있다.
-3. 기본 API가 runtime과 플랫폼에 독립적이다.
-4. 실제 Target, 디스크 목록, 애플리케이션 설정 없이 독립적으로 테스트할 수 있다.
-5. 의존성이 작고 선택적 연동은 feature로 분리되어 있다.
-6. 불변식과 실패가 타입과 오류로 표현된다.
-7. semantic versioning을 감당할 만큼 공개 API가 안정되었다.
-8. 외부 사용에 필요한 문서, wire fixture와 잘못된 입력 테스트가 있다.
-
-지금은 이 경계를 지키되, Target Server 완성과 end-to-end 검증 전에는 물리적인 크레이트 분리나 publish를 수행하지 않는다.
-
 ## 현재 구현 기준선
 
-이 문서를 작성한 시점의 protocol core에는 다음 기능이 있다.
+이 문서를 작성한 시점의 wire 계층에는 다음 기능이 있다.
 
 - 고정 48-byte BHS와 opcode dispatch
 - control, Login, SCSI PDU 타입
@@ -167,9 +148,9 @@ sequence number를 구현할 때는 serial number 산술과 wraparound를 명시
 
 ## 외부 구현과 의존성
 
-현재 결정은 `Masorubka1/iscsI-client-rs`를 가져오거나 복사하지 않고 로컬 PDU 구현을 계속 사용하는 것이다. 해당 구현은 client 중심의 범위와 API 경계 때문에 이 Target의 재사용 가능한 protocol core보다 적합하지 않다. 사용자가 명시적으로 재검토를 요청할 때만 최신 기능, 유지보수 상태와 라이선스 호환성을 다시 조사한다.
+현재 결정은 `Masorubka1/iscsI-client-rs`를 가져오거나 복사하지 않고 로컬 PDU 구현을 계속 사용하는 것이다. 해당 구현은 client 중심의 범위와 API 경계 때문에 이 Target에는 로컬 구현보다 적합하지 않다. 사용자가 명시적으로 재검토를 요청할 때만 최신 기능, 유지보수 상태와 라이선스 호환성을 다시 조사한다.
 
-의존성을 추가하기 전에 어떤 불변식이나 상당한 구현 부담을 대신하는지 설명한다. 작고 감사 가능한 구현이면 core에 불필요한 의존성을 추가하지 않는다. runtime, tracing, 인증과 platform 연동은 보편적으로 필요하지 않으면 feature로 분리한다.
+의존성을 추가하기 전에 어떤 불변식이나 상당한 구현 부담을 대신하는지 설명한다. 작고 감사 가능한 구현이면 불필요한 의존성을 추가하지 않는다. runtime, tracing, 인증과 platform 연동은 보편적으로 필요하지 않으면 feature로 분리한다.
 
 `unsafe`를 피한다. 플랫폼 I/O나 zero-copy 연동 때문에 꼭 필요하면 안전한 인터페이스 뒤에 격리하고 모든 safety invariant를 문서화하며 집중 테스트를 추가한다. 네트워크나 디스크 입력으로 도달할 수 있는 production 경로에서는 `unwrap`과 `expect`를 사용하지 않는다.
 
@@ -186,7 +167,7 @@ sequence number를 구현할 때는 serial number 산술과 wraparound를 명시
 
 ## 테스트와 검증
 
-변경 범위에 맞는 검증을 실행한다. protocol core 변경의 전체 검증 기준은 다음과 같다.
+변경 범위에 맞는 검증을 실행한다. 전체 검증 기준은 다음과 같다.
 
 ```sh
 cargo fmt --all -- --check
@@ -221,7 +202,7 @@ workspace 전체를 함께 빌드하면 실행 파일 패키지가 라이브러�
 - 사용자가 명시적으로 요청하지 않으면 commit, amend, push, tag 또는 release하지 않는다.
 - 요청된 commit은 한 가지 논리 변경에 집중하고, 손대지 않은 관련 없는 변경을 보고한다.
 - `Cargo.lock`을 직접 편집하거나 삭제하지 않는다. 의존성 해석이 의도적으로 바뀔 때만 Cargo가 갱신하게 하고, commit 요청 시 해당 생성 변경도 관련 commit에 포함한다.
-- 정리 작업의 일부로 라이선스나 publish metadata를 변경하지 않는다.
+- 정리 작업의 일부로 라이선스를 변경하지 않는다.
 
 ## 라이선스와 출처
 
@@ -229,23 +210,22 @@ iSCSIConsole은 참고 자료일 뿐이고 이 프로젝트에는 그 코드가 
 
 이 프로젝트의 라이선스는 소유자가 GPL 버전 3 또는 그 이후 버전(`GPL-3.0-or-later`)으로 결정했다. 전문은 저장소의 `LICENSE`에 있고 `Cargo.toml`의 `license`에 선언한다. 새 의존성이나 가져오는 코드는 GPL-3.0과 호환되는 라이선스여야 한다.
 
-publish 조건은 최종 배포 전에 소유자가 결정한다. 명시적인 결정 없이 라이선스를 바꾸거나 package를 publish하지 않는다. 전체 의존성의 라이선스 감사는 배포 전 작업으로 남아 있다.
+crates.io에는 올리지 않는다. 명시적인 결정 없이 라이선스를 바꾸지 않는다. 전체 의존성의 라이선스 감사는 release 전 작업으로 남아 있다.
 
 ## 기본 이정표 순서
 
 사용자가 우선순위를 바꾸지 않는 한 다음 순서로 완성을 진행한다.
 
-1. wire/PDU core 완성과 강화
+1. wire/PDU 계층 완성과 강화
 2. Login 정책, 응답 생성과 Connection 상태
 3. Session, sequencing, command 추적, Logout, recovery와 discovery
 4. SCSI command 실행, status, sense, residual과 LUN 동작
 5. Storage 인터페이스와 안전한 raw file/image backend, 이후 platform backend
 6. Target server와 설정/관리 인터페이스
 7. Initiator 상호운용성, 장시간 실행, 비정상 입력과 recovery 테스트
-8. 재사용 크레이트 추출, API 안정화, 문서화와 라이선스 감사
-9. 명시적으로 승인된 마지막 단계로 publish
-10. VHD/VMDK 가상 디스크 포맷 지원 — 위의 모든 과업이 완성된 뒤 최후 순위
+8. 문서화, 라이선스 감사와 release 준비
+9. VHD/VMDK 가상 디스크 포맷 지원 — 위의 모든 과업이 완성된 뒤 최후 순위
 
-VHD/VMDK는 10번에 도달하기 전에는 조사, 의존성 추가와 구현을 시작하지 않는다. 그때까지 지원하는 image backend는 raw IMG/file뿐이다.
+VHD/VMDK는 9번에 도달하기 전에는 조사, 의존성 추가와 구현을 시작하지 않는다. 그때까지 지원하는 image backend는 raw IMG/file뿐이다.
 
 아키텍처, 검증 명령 또는 배포 계획이 실질적으로 바뀌면 이 문서를 갱신한다.

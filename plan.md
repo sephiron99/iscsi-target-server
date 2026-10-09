@@ -11,10 +11,10 @@
 ## 계획 원칙
 
 - RFC 7143과 관련 SCSI 표준을 원본 iSCSIConsole 구현보다 우선한다.
-- protocol core, Target/Session, SCSI, Storage, 관리 UI의 의존 방향을 분리한다.
+- wire 계층, Target/Session, SCSI, Storage, 관리 UI의 의존 방향을 분리한다.
 - 먼저 end-to-end로 동작하는 Target Server를 완성한다.
-- PDU 등 core의 별도 크레이트 분리와 publish는 프로젝트 완성 후 마지막 단계에서 수행한다.
-- VHD/VMDK 가상 디스크 포맷 지원은 1~12단계의 모든 과업이 완성된 뒤 최후 순위(13단계)로 미룬다. 그 전에는 조사, 의존성 추가와 구현을 시작하지 않는다.
+- 프로젝트 전체를 하나의 단위로 배포한다. PDU 파싱 같은 부분을 별도 크레이트로 떼어 공개하지 않고 crates.io에도 올리지 않는다. 배포는 GitHub release의 실행 파일로 한다.
+- VHD/VMDK 가상 디스크 포맷 지원은 1~11단계의 모든 과업이 완성된 뒤 최후 순위(12단계)로 미룬다. 그 전에는 조사, 의존성 추가와 구현을 시작하지 않는다.
 - 각 단계는 정상 동작뿐 아니라 잘못된 peer 입력, 자원 제한과 상태 전환 테스트를 포함해야 완료로 본다.
 
 ## 현재 출발점
@@ -159,7 +159,7 @@
 - protocol/Session 계층이 파일 경로나 Win32 타입을 알지 않고 backend를 사용할 수 있다.
 - 여러 Session의 동시 I/O, flush와 종료 시 데이터 일관성이 검증된다.
 
-VHD/VMDK 지원은 이 단계의 범위가 아니며 13단계로 미뤘다. 이 단계의 image backend는 raw IMG/file만 뜻한다.
+VHD/VMDK 지원은 이 단계의 범위가 아니며 12단계로 미뤘다. 이 단계의 image backend는 raw IMG/file만 뜻한다.
 
 ## 8. Target server, 설정과 CLI
 
@@ -192,7 +192,7 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 - [ ] WinSafe event loop와 Target async runtime을 분리
 - [ ] network/storage 작업은 GUI thread에서 실행하지 않고 channel로 명령과 event 전달
 - [ ] background event를 안전하게 UI thread로 전달하고 종료 순서를 명시
-- [ ] non-Windows 기본 빌드와 protocol core에 Win32 의존성이 유입되지 않도록 검증
+- [ ] non-Windows 기본 빌드와 wire 계층에 Win32 의존성이 유입되지 않도록 검증
 
 ### 화면과 기능
 
@@ -282,6 +282,8 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 
 ## 11. 문서화와 최종 릴리스 준비
 
+crates.io에는 올리지 않고 GitHub release의 실행 파일로 배포한다.
+
 - [ ] 설치, 설정, CLI와 Windows GUI 사용 문서
 - [ ] 지원하는 Login key, PDU, SCSI command와 backend 표
 - [ ] 아키텍처와 상태 머신 문서
@@ -296,27 +298,9 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 - 새 사용자가 문서만으로 Target을 설치, 구성하고 Initiator를 연결할 수 있다.
 - 지원 범위, 알려진 제한과 라이선스가 명확하다.
 
-## 12. Core 크레이트 분리와 publish
+## 12. VHD/VMDK 지원 (최후 순위)
 
-이 단계는 1~11단계가 완료된 뒤에만 시작한다.
-
-- [ ] protocol-general API와 Target 전용 정책의 최종 경계 검토
-- [ ] PDU/frame/digest/error 기능을 runtime 독립 크레이트로 추출
-- [ ] 선택적 Tokio adapter feature 분리
-- [ ] public API, semantic versioning과 MSRV 결정
-- [ ] 독립 fixture, malformed-input test와 crate 문서 완성
-- [ ] package 이름과 repository metadata 결정 (라이선스는 GPL-3.0-or-later로 결정됨, `LICENSE`와 `Cargo.toml`에 반영)
-- [ ] 로컬 package 검증과 dry-run
-- [ ] 사용자의 명시적 승인 후 마지막 작업으로 publish
-
-완료 조건:
-
-- 추출 후에도 Target Server의 전체 테스트와 상호운용성 테스트가 동일하게 성공한다.
-- core 크레이트가 Target 설정, GUI, Storage와 async runtime에 기본 의존하지 않는다.
-
-## 13. VHD/VMDK 지원 (최후 순위)
-
-이 단계는 1~12단계의 모든 과업이 완료된 뒤에만 시작한다. 그 전까지 VHD/VMDK는 지원하지 않는 backend이며, 지원 범위와 알려진 제한 문서에 미지원으로 기록한다.
+이 단계는 1~11단계의 모든 과업이 완료된 뒤에만 시작한다. 그 전까지 VHD/VMDK는 지원하지 않는 backend이며, 지원 범위와 알려진 제한 문서에 미지원으로 기록한다.
 
 - [ ] VHD/VMDK 지원 범위와 외부 라이브러리 도입 여부 조사 — 원본 DiskAccessLibrary의 지원 범위(fixed/dynamic VHD, VMDK)를 기준선으로 사용
 - [ ] 조사 결과에 따른 backend 구현과 `StorageBackend` trait 뒤 격리
