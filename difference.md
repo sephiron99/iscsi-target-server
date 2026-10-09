@@ -7,7 +7,7 @@
 
 - 이 프로젝트는 **프로토콜 정확성, 보안, 테스트**에서 원본을 앞선다: CHAP, CRC32C digest, Task Management, serial number 산술, 자원 상한, 113개 단위/통합 테스트.
 - 원본이 앞선 영역은 **storage backend 다양성**(VHD dynamic, VMDK, dynamic volume, SPTI), **실전 검증 이력**, **실행 가능한 완제품**이라는 점이다.
-- plan.md의 우선순위(8단계 daemon → 상호운용 검증)가 실전 검증과 완제품 격차를 겨냥한다. VHD/VMDK 격차는 모든 과업이 완성된 뒤 최후 순위(plan 13단계)로 미뤘다.
+- plan.md의 우선순위(8단계 server → 상호운용 검증)가 실전 검증과 완제품 격차를 겨냥한다. VHD/VMDK 격차는 모든 과업이 완성된 뒤 최후 순위(plan 13단계)로 미뤘다.
 
 ## 인증 (CHAP)
 
@@ -85,7 +85,7 @@ Block Limits, Block Device Characteristics 제공.
 |---------------------|---------------------------------------------------------------|----------------------------------------------------|
 | GUI                 | WinForms (target 추가, VHD/RAM disk 생성, 디스크/volume 선택) | WinSafe 계획 (9단계, 미구현)                       |
 | 설정 저장/복원      | **없음 — 재시작마다 GUI로 재구성**                            | versioned TOML load/save + 외부 CHAP secret 파일   |
-| CLI / headless 실행 | 없음                                                          | `iscsi-targetd` TOML 설정 daemon (단일 Target)     |
+| CLI / headless 실행 | 없음                                                          | `iscsi-targetd` TOML 설정 server (단일 Target)     |
 | Target 수           | 여러 Target (Login의 `TargetName`으로 선택)                   | 단일 Target만 허용 (의도적 차이, 여러 LUN은 가능)  |
 | service API         | 이벤트 훅 수준                                                | Target/LUN 추가·제거·상태 조회 구현                |
 | logging             | severity 로그 + 파일                                          | tracing 구조화 로깅 (secret/payload 미기록)        |

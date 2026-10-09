@@ -240,7 +240,7 @@ publish 조건은 최종 배포 전에 소유자가 결정한다. 명시적인 �
 3. Session, sequencing, command 추적, Logout, recovery와 discovery
 4. SCSI command 실행, status, sense, residual과 LUN 동작
 5. Storage 인터페이스와 안전한 raw file/image backend, 이후 platform backend
-6. Target daemon과 설정/관리 인터페이스
+6. Target server와 설정/관리 인터페이스
 7. Initiator 상호운용성, 장시간 실행, 비정상 입력과 recovery 테스트
 8. 재사용 크레이트 추출, API 안정화, 문서화와 라이선스 감사
 9. 명시적으로 승인된 마지막 단계로 publish

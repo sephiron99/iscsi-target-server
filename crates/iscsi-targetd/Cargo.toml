@@ -3,7 +3,7 @@ name = "iscsi-targetd"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Command-line iSCSI target daemon for Windows 10/11"
+description = "Command-line iSCSI target server for Windows 10/11"
 
 [dependencies]
 iscsi-target-server = { workspace = true, features = ["codec", "tracing"] }

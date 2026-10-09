@@ -32,7 +32,7 @@ windows-sys = { version = "0.61", features = [
 
 [features]
 default = []
-# Tokio로 실제 TCP 접속을 처리한다: codec, connection_io, target_service, daemon 모듈
+# Tokio로 실제 TCP 접속을 처리한다: codec, connection_io, target_service, server 모듈
 codec = ["dep:tokio-util", "dep:tokio"]
 # 구조화된 tracing event 계측
 tracing = ["dep:tracing"]

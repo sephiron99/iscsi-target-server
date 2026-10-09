@@ -13,12 +13,12 @@ pub const USAGE: &str = "\
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliCommand {
-    Run(DaemonOptions),
+    Run(ServerOptions),
     Help,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DaemonOptions {
+pub struct ServerOptions {
     pub config_path: PathBuf,
     pub check_only: bool,
     pub log_level: LogLevel,
@@ -90,7 +90,7 @@ where
         }
     }
     let config_path = config_path.ok_or(UsageError::MissingConfigPath)?;
-    Ok(CliCommand::Run(DaemonOptions {
+    Ok(CliCommand::Run(ServerOptions {
         config_path,
         check_only,
         log_level: log_level.unwrap_or_default(),
@@ -140,7 +140,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             command,
-            CliCommand::Run(DaemonOptions {
+            CliCommand::Run(ServerOptions {
                 config_path: PathBuf::from("/etc/iscsi/target.toml"),
                 check_only: true,
                 log_level: LogLevel::Debug,
@@ -157,7 +157,7 @@ mod tests {
         let command = parse_arguments(arguments(&["--config", "target.toml"])).unwrap();
         assert_eq!(
             command,
-            CliCommand::Run(DaemonOptions {
+            CliCommand::Run(ServerOptions {
                 config_path: PathBuf::from("target.toml"),
                 check_only: false,
                 log_level: LogLevel::Info,

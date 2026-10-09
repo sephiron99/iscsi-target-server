@@ -8,7 +8,7 @@ use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 
-use crate::config::{DEFAULT_MAX_SERVICE_CONNECTIONS, DaemonConfig};
+use crate::config::{DEFAULT_MAX_SERVICE_CONNECTIONS, ServerConfig};
 use crate::connection::{ConnectionCloseReason, ConnectionError, ConnectionStateMachine};
 use crate::connection_io::{
     BlockingStorageExecutor, BlockingStorageExecutorError, ConnectionIoError,
@@ -30,8 +30,8 @@ impl Default for TargetServiceConfig {
     }
 }
 
-impl From<&DaemonConfig> for TargetServiceConfig {
-    fn from(config: &DaemonConfig) -> Self {
+impl From<&ServerConfig> for TargetServiceConfig {
+    fn from(config: &ServerConfig) -> Self {
         Self {
             max_connections: config.max_connections(),
             max_blocking_storage_operations: config.max_blocking_storage_operations(),

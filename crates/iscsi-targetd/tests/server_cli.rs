@@ -1,4 +1,4 @@
-//! daemon CLI 통합 테스트: 실제 `iscsi-targetd` binary를 실행해 설정 검증,
+//! server CLI 통합 테스트: 실제 `iscsi-targetd` binary를 실행해 설정 검증,
 //! login/logout을 확인한다.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -55,7 +55,7 @@ fn free_port() -> u16 {
 }
 
 fn write_config(directory: &TestDirectory, port: u16) -> PathBuf {
-    let path = directory.path("daemon.toml");
+    let path = directory.path("server.toml");
     std::fs::write(
         &path,
         format!(
@@ -131,7 +131,7 @@ fn invalid_configuration_fails_without_leaking_inline_secret() {
 
 const INITIATOR_NAME: &str = "iqn.2026-07.example.com:initiator";
 
-/// 테스트가 끝나거나 실패해도 daemon process가 남지 않도록 drop 시 강제 종료한다.
+/// 테스트가 끝나거나 실패해도 server process가 남지 않도록 drop 시 강제 종료한다.
 struct ChildGuard(Child);
 
 impl Drop for ChildGuard {
@@ -182,7 +182,7 @@ fn login_response(pdu: Pdu) -> LoginResponse {
 }
 
 #[test]
-fn daemon_serves_login_and_logout() {
+fn server_serves_login_and_logout() {
     let directory = TestDirectory::new("serve");
     let config = write_config(&directory, free_port());
     let mut child = ChildGuard(
@@ -199,7 +199,7 @@ fn daemon_serves_login_and_logout() {
     let address: SocketAddr = loop {
         let line = lines
             .next()
-            .expect("daemon stdout closed before listening line")
+            .expect("server stdout closed before listening line")
             .unwrap();
         if let Some(rest) = line.strip_prefix("listening ") {
             break rest.parse().unwrap();

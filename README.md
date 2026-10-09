@@ -28,7 +28,7 @@ The main differences:
 | Header/Data digest | Not supported | CRC32C |
 | Targets per server | Several | Exactly one, with several LUNs |
 | Virtual disk formats | VHD, VMDK | Not supported |
-| User interface | Windows Forms GUI | Command-line daemon with a TOML configuration file |
+| User interface | Windows Forms GUI | Command-line server with a TOML configuration file |
 | Platform | Windows, Mono | Windows 10 and 11 only |
 
 ## Status
@@ -176,14 +176,14 @@ not depend on each other; both use the library.
 | Package | Kind | Contents |
 |---|---|---|
 | `crates/iscsi-target-server` | Library | Protocol, SCSI, storage backends, configuration, management API, Tokio service |
-| `crates/iscsi-targetd` | Executable | Command-line daemon: arguments, log output, Ctrl+C |
+| `crates/iscsi-targetd` | Executable | Command-line server: arguments, log output, Ctrl+C |
 | `crates/iscsi-target-gui` | Executable | Windows GUI. A placeholder; not implemented yet |
 
 By role the library falls into four layers, and upper layers depend on lower ones.
 
 | Layer | Modules |
 |---|---|
-| Service and configuration | `daemon`, `config`, `config_file`, `management`, `target_service`, `connection_io` |
+| Service and configuration | `server`, `config`, `config_file`, `management`, `target_service`, `connection_io` |
 | Target protocol state machines | `connection`, `control_state`, `target_login`, `negotiation`, `login_policy`, `auth`, `session`, `serial` |
 | SCSI and storage | `scsi_target`, `disk_identity`, `platform/windows` |
 | Wire format | `lib` (`Pdu`), `frame`, `codec`, `digest`, `bhs`, `opcode`, `login`, `control`, `scsi`, `error` |

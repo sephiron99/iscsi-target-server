@@ -41,15 +41,15 @@ pub mod config_file;
 #[cfg(feature = "codec")]
 pub mod connection_io;
 #[cfg(feature = "codec")]
-pub mod daemon;
+pub mod server;
 #[cfg(feature = "codec")]
 pub mod target_service;
 
 pub use auth::{ChapCredentials, ChapError, ChapExchange};
 pub use bhs::{BHS_LEN, Bhs};
 pub use config::{
-    AuthenticationConfig, ChapAuthenticationConfig, ConfigError, DaemonConfig, ListenConfig,
-    LunBackendConfig, LunConfig, TargetConfig,
+    AuthenticationConfig, ChapAuthenticationConfig, ConfigError, ListenConfig, LunBackendConfig,
+    LunConfig, ServerConfig, TargetConfig,
 };
 pub use config_file::{
     CONFIG_FILE_VERSION, ConfigFileError, ConfigFileKind, ConfigIoOperation, MAX_CONFIG_FILE_LENGTH,

@@ -1,6 +1,6 @@
 //! 설정 하나로 Target service를 띄우고 내리는 계층 (feature `codec`).
 //!
-//! 명령줄 daemon과 GUI가 함께 쓰는 진입점이다. 인자 처리, 로그 출력 설정, 종료 신호
+//! 명령줄 server와 GUI가 함께 쓰는 진입점이다. 인자 처리, 로그 출력 설정, 종료 신호
 //! 같은 실행 파일의 일은 여기에 두지 않는다.
 //!
 //! 로그에는 peer 주소, 종료 사유와 오류 요약만 남긴다. Login text, CHAP secret 같은
@@ -13,36 +13,36 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use tokio::sync::watch;
 
-use crate::config::{ConfigError, DaemonConfig};
+use crate::config::{ConfigError, ServerConfig};
 use crate::connection::{ConnectionError, ConnectionStateMachine};
 use crate::management::{ManagementError, TargetServiceApi};
 use crate::target_service::{
     TargetService, TargetServiceConfig, TargetServiceError, TargetServiceSummary,
 };
 
-/// daemon이 여는 Session의 command window (`MaxCmdSN - ExpCmdSN + 1`).
-pub const DAEMON_COMMAND_WINDOW: u32 = 32;
+/// server가 여는 Session의 command window (`MaxCmdSN - ExpCmdSN + 1`).
+pub const SERVER_COMMAND_WINDOW: u32 = 32;
 
 type ConnectionFactory =
     Box<dyn Fn(SocketAddr) -> Result<ConnectionStateMachine, ConnectionError> + Send + Sync>;
 
-/// 설정에서 만들어져 listen 중인 daemon. [`Daemon::run`]으로 종료까지 실행한다.
-pub struct Daemon {
+/// 설정에서 만들어져 listen 중인 server. [`Server::run`]으로 종료까지 실행한다.
+pub struct Server {
     service: TargetService<ConnectionFactory>,
     api: TargetServiceApi,
 }
 
-impl Daemon {
+impl Server {
     /// 검증된 설정으로 Target을 등록하고 listener를 bind한다.
     ///
-    /// daemon은 단일 Target만 허용한다. Connection은 수락 시점에 그 Target에
+    /// server는 단일 Target만 허용한다. Connection은 수락 시점에 그 Target에
     /// 바인딩되고 Login의 `TargetName`은 일치 여부만 검증한다. 원본 iSCSIConsole과
     /// 달리 `TargetName`으로 Target을 선택하는 다중 Target은 지원하지 않는다.
-    pub async fn bind(config: &DaemonConfig) -> Result<Self, DaemonError> {
+    pub async fn bind(config: &ServerConfig) -> Result<Self, ServerError> {
         config.validate()?;
         let targets = config.targets();
         let [target] = targets else {
-            return Err(DaemonError::MultipleTargetsUnsupported(targets.len()));
+            return Err(ServerError::MultipleTargetsUnsupported(targets.len()));
         };
 
         let api = TargetServiceApi::new();
@@ -54,7 +54,7 @@ impl Daemon {
             let serial = tsih_counter.fetch_add(1, Ordering::Relaxed);
             let tsih = (serial % u32::from(u16::MAX)) as u16 + 1;
             factory_api
-                .create_connection(&bound_target, tsih, DAEMON_COMMAND_WINDOW)
+                .create_connection(&bound_target, tsih, SERVER_COMMAND_WINDOW)
                 .map_err(|error| {
                     #[cfg(feature = "tracing")]
                     tracing::warn!(%peer, %error, "connection setup failed");
@@ -85,7 +85,7 @@ impl Daemon {
     pub async fn run(
         self,
         shutdown: impl Future<Output = ()>,
-    ) -> Result<TargetServiceSummary, DaemonError> {
+    ) -> Result<TargetServiceSummary, ServerError> {
         let (sender, receiver) = watch::channel(false);
         let mut service_task = tokio::spawn(self.service.run(receiver));
         tokio::pin!(shutdown);
@@ -103,10 +103,10 @@ impl Daemon {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum DaemonError {
+pub enum ServerError {
     #[error(transparent)]
     Config(#[from] ConfigError),
-    #[error("daemon은 단일 Target 설정만 지원한다; {0}개가 설정되었다")]
+    #[error("server는 단일 Target 설정만 지원한다; {0}개가 설정되었다")]
     MultipleTargetsUnsupported(usize),
     #[error(transparent)]
     Management(#[from] ManagementError),
@@ -141,34 +141,34 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_targets_are_rejected_before_binding() {
-        let mut config = DaemonConfig::default();
+        let mut config = ServerConfig::default();
         config.add_target(memory_target("first")).unwrap();
         config.add_target(memory_target("second")).unwrap();
-        let Err(error) = Daemon::bind(&config).await else {
+        let Err(error) = Server::bind(&config).await else {
             panic!("expected multi-target rejection");
         };
-        assert!(matches!(error, DaemonError::MultipleTargetsUnsupported(2)));
+        assert!(matches!(error, ServerError::MultipleTargetsUnsupported(2)));
     }
 
     #[tokio::test]
-    async fn daemon_binds_and_stops_on_shutdown_future() {
+    async fn server_binds_and_stops_on_shutdown_future() {
         let port = {
             let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             probe.local_addr().unwrap().port()
         };
-        let mut config = DaemonConfig::new(
+        let mut config = ServerConfig::new(
             ListenConfig::new("127.0.0.1".parse().unwrap(), port).unwrap(),
             4,
         )
         .unwrap();
-        config.add_target(memory_target("daemon")).unwrap();
+        config.add_target(memory_target("server")).unwrap();
 
-        let daemon = Daemon::bind(&config).await.unwrap();
-        let address = daemon.local_addr().unwrap();
+        let server = Server::bind(&config).await.unwrap();
+        let address = server.local_addr().unwrap();
         assert_eq!(address.port(), port);
-        assert_eq!(daemon.api().targets().unwrap().len(), 1);
+        assert_eq!(server.api().targets().unwrap().len(), 1);
 
-        let summary = daemon.run(async {}).await.unwrap();
+        let summary = server.run(async {}).await.unwrap();
         assert_eq!(summary, TargetServiceSummary::default());
     }
 }

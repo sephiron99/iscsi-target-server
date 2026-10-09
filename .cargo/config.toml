@@ -5,7 +5,7 @@
 # cargo-cross는 MSVC target을 지원하지 않으므로 target은 i686-pc-windows-gnu이다.
 #
 # 사용법:
-#   cargo build-win32        # 32bit Windows daemon binary (release)
+#   cargo build-win32        # 32bit Windows server binary (release)
 #   cargo cross build -p iscsi-targetd
 #   cargo cross test --workspace --all-features   # WSL interop으로 Windows test binary를 실행
 #

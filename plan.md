@@ -161,7 +161,7 @@
 
 VHD/VMDK 지원은 이 단계의 범위가 아니며 13단계로 미뤘다. 이 단계의 image backend는 raw IMG/file만 뜻한다.
 
-## 8. Target daemon, 설정과 CLI
+## 8. Target server, 설정과 CLI
 
 - [x] TCP listener와 connection task 수명주기
 - [x] bind 주소, port, Target IQN, LUN과 인증 설정 모델
@@ -170,8 +170,8 @@ VHD/VMDK 지원은 이 단계의 범위가 아니며 13단계로 미뤘다. 이 
 - [x] start, stop, 진행 중 blocking storage drain을 포함한 graceful shutdown과 active session 정리
 - [x] 구조화된 logging과 민감 정보 필터링
 - [x] headless 실행용 CLI
-- [x] daemon과 CLI 통합 테스트
-- [x] Target 수 결정: daemon은 단일 Target만 허용한다. Login 시점 `TargetName`으로 Target을 선택하는 다중 Target Connection은 구현하지 않으며, Target이 하나가 아닌 설정은 시작 시 거부한다. 여러 disk는 한 Target의 여러 LUN으로 내보낸다
+- [x] server와 CLI 통합 테스트
+- [x] Target 수 결정: server는 단일 Target만 허용한다. Login 시점 `TargetName`으로 Target을 선택하는 다중 Target Connection은 구현하지 않으며, Target이 하나가 아닌 설정은 시작 시 거부한다. 여러 disk는 한 Target의 여러 LUN으로 내보낸다
 
 완료 조건:
 
@@ -188,7 +188,7 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 - [ ] Windows 전용 binary 또는 module로 격리하고 `#[cfg(windows)]` 적용
 - [ ] `winsafe` 의존성을 `iscsi-target-gui` 패키지의 Windows target 전용 dependency로 추가
 - [ ] 먼저 `gui` feature만 사용하고 실제 control/API에 필요한 feature만 추가
-- [ ] GUI가 daemon/CLI와 동일한 관리 service API를 사용하도록 구성
+- [ ] GUI가 server/CLI와 동일한 관리 service API를 사용하도록 구성
 - [ ] WinSafe event loop와 Target async runtime을 분리
 - [ ] network/storage 작업은 GUI thread에서 실행하지 않고 channel로 명령과 event 전달
 - [ ] background event를 안전하게 UI thread로 전달하고 종료 순서를 명시
@@ -211,7 +211,7 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 
 - [ ] UI event가 장시간 I/O 중에도 block되지 않는지 확인
 - [ ] backend/Target 변경 실패 시 UI model과 실제 service 상태가 어긋나지 않는지 확인
-- [ ] start/stop 반복, 창 닫기와 daemon 종료 race 테스트
+- [ ] start/stop 반복, 창 닫기와 server 종료 race 테스트
 - [ ] Windows CI에서 GUI binary build/check
 - [ ] 실제 Windows에서 high-DPI, 관리자 권한 필요 작업과 오류 표시 확인
 - [ ] WinSafe MIT license와 최종 배포물의 고지 사항 기록
@@ -269,11 +269,11 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 
 "세션의 장치가 현재 사용중이므로 세션을 로그아웃할 수 없습니다"는 Windows Initiator가 Target에 Logout을 보내기 전에 스스로 내는 메시지이다. Target의 오류가 아니며, 11단계의 사용 문서에 옮겨 적는다.
 
-- 구분: daemon 로그에서 `connection accepted` 직후 1초 안에 같은 peer로 `NormalLogout`이 찍히는 연결은 discovery용이다. 실제 session의 Logout은 오래 유지된 peer의 `NormalLogout`으로 나타난다.
+- 구분: server 로그에서 `connection accepted` 직후 1초 안에 같은 peer로 `NormalLogout`이 찍히는 연결은 discovery용이다. 실제 session의 Logout은 오래 유지된 peer의 `NormalLogout`으로 나타난다.
 - volume이 사용 중인 경우: iSCSI disk의 드라이브를 연 탐색기 창과 프로그램을 닫는다. 그래도 거부되면 `Set-Disk -Number <번호> -IsOffline $true`로 disk를 내린 뒤 끊는다.
-- disk가 offline인데도 거부되는 경우: disk 장치 자체를 연 프로세스가 있다. 디스크 관리와 `diskpart` 창을 닫고 `Stop-Service vds`, `Stop-Service smphost` 후 곧바로 `Disconnect-IscsiTarget -NodeAddress <IQN>`을 실행한다. 사이에 `Get-Disk`를 실행하면 서비스가 다시 disk를 잡는다. 이 원인은 daemon 로그의 `MODE SENSE` page 0x3f/`READ CAPACITY` 조회에서 추론한 것이며 어느 프로세스인지 직접 확인하지는 않았다.
-- 마지막 수단: disk를 offline으로 내린 뒤에는 남은 write가 없으므로 daemon을 Ctrl+C로 종료해도 된다. volume이 mount된 상태에서 daemon을 먼저 종료하면 read-write LUN의 data가 손상될 수 있다.
-- 즐겨찾는 대상(`IsPersistent = True`)으로 등록된 Target은 daemon을 띄울 때마다 Windows가 자동으로 다시 연결한다. backend를 바꿔 가며 시험할 때는 즐겨찾기에서 지운다.
+- disk가 offline인데도 거부되는 경우: disk 장치 자체를 연 프로세스가 있다. 디스크 관리와 `diskpart` 창을 닫고 `Stop-Service vds`, `Stop-Service smphost` 후 곧바로 `Disconnect-IscsiTarget -NodeAddress <IQN>`을 실행한다. 사이에 `Get-Disk`를 실행하면 서비스가 다시 disk를 잡는다. 이 원인은 server 로그의 `MODE SENSE` page 0x3f/`READ CAPACITY` 조회에서 추론한 것이며 어느 프로세스인지 직접 확인하지는 않았다.
+- 마지막 수단: disk를 offline으로 내린 뒤에는 남은 write가 없으므로 server를 Ctrl+C로 종료해도 된다. volume이 mount된 상태에서 server를 먼저 종료하면 read-write LUN의 data가 손상될 수 있다.
+- 즐겨찾는 대상(`IsPersistent = True`)으로 등록된 Target은 server를 띄울 때마다 Windows가 자동으로 다시 연결한다. backend를 바꿔 가며 시험할 때는 즐겨찾기에서 지운다.
 
 완료 조건:
 

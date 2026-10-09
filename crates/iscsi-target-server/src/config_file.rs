@@ -1,4 +1,4 @@
-//! daemon TOML 설정 파일의 load/save 경계.
+//! server TOML 설정 파일의 load/save 경계.
 //!
 //! CHAP secret 본문은 TOML에 허용하지 않고 별도 파일에서만 읽는다. runtime 설정과
 //! 직렬화 DTO를 분리해 secret bytes가 직렬화 구현에 도달하지 않도록 한다.
@@ -16,8 +16,8 @@ use zeroize::Zeroizing;
 use crate::auth::MAX_CHAP_BINARY_LENGTH;
 use crate::config::{
     AuthenticationConfig, ChapAuthenticationConfig, ConfigError, DEFAULT_ISCSI_PORT,
-    DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS, DEFAULT_MAX_SERVICE_CONNECTIONS, DaemonConfig,
-    ListenConfig, LunBackendConfig, LunConfig, TargetConfig,
+    DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS, DEFAULT_MAX_SERVICE_CONNECTIONS, ListenConfig,
+    LunBackendConfig, LunConfig, ServerConfig, TargetConfig,
 };
 use crate::login::{IscsiName, IscsiNameError};
 
@@ -26,7 +26,7 @@ pub const MAX_CONFIG_FILE_LENGTH: usize = 1024 * 1024;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-impl DaemonConfig {
+impl ServerConfig {
     /// TOML 설정과 참조된 secret 파일을 읽고 전체 설정을 검증한다.
     pub fn load_from_file(path: impl AsRef<Path>) -> Result<Self, ConfigFileError> {
         let path = absolute_path(path.as_ref())?;
@@ -81,9 +81,9 @@ struct ConfigDocument {
 }
 
 impl ConfigDocument {
-    fn into_runtime(self, base: &Path) -> Result<DaemonConfig, ConfigFileError> {
+    fn into_runtime(self, base: &Path) -> Result<ServerConfig, ConfigFileError> {
         let listen = ListenConfig::new(self.listen.address, self.listen.port)?;
-        let mut config = DaemonConfig::new(listen, self.max_connections)?;
+        let mut config = ServerConfig::new(listen, self.max_connections)?;
         config.set_max_blocking_storage_operations(self.max_blocking_storage_operations)?;
         for target in self.targets {
             config.add_target(target.into_runtime(base)?)?;
@@ -92,7 +92,7 @@ impl ConfigDocument {
         Ok(config)
     }
 
-    fn from_runtime(config: &DaemonConfig) -> Result<Self, ConfigFileError> {
+    fn from_runtime(config: &ServerConfig) -> Result<Self, ConfigFileError> {
         let listen = config.listen();
         let targets = config
             .targets()
@@ -736,7 +736,7 @@ durable-flush = true
         let config_path = directory.path("target.toml");
         fs::write(&config_path, configuration("chap.secret")).unwrap();
 
-        let config = DaemonConfig::load_from_file(&config_path).unwrap();
+        let config = ServerConfig::load_from_file(&config_path).unwrap();
         assert_eq!(config.max_connections(), 16);
         assert_eq!(config.max_blocking_storage_operations(), 4);
         assert_eq!(
@@ -758,7 +758,7 @@ durable-flush = true
         let saved = fs::read_to_string(&saved_path).unwrap();
         assert!(saved.contains("secret-file"));
         assert!(!saved.contains("external-only-secret"));
-        assert_eq!(DaemonConfig::load_from_file(&saved_path).unwrap(), config);
+        assert_eq!(ServerConfig::load_from_file(&saved_path).unwrap(), config);
     }
 
     #[test]
@@ -773,7 +773,7 @@ durable-flush = true
         );
         fs::write(&config_path, input).unwrap();
 
-        let error = DaemonConfig::load_from_file(config_path).unwrap_err();
+        let error = ServerConfig::load_from_file(config_path).unwrap_err();
         assert!(matches!(error, ConfigFileError::Toml { .. }));
         assert!(!format!("{error}").contains("must-never-be-logged"));
         assert!(!format!("{error:?}").contains("must-never-be-logged"));
@@ -782,7 +782,7 @@ durable-flush = true
     #[test]
     fn in_memory_chap_secret_cannot_enter_the_serialization_path() {
         let directory = TestDirectory::new("in-memory-secret");
-        let mut config = DaemonConfig::default();
+        let mut config = ServerConfig::default();
         let name = IscsiName::parse("iqn.2026-07.example.com:memory-secret").unwrap();
         let mut target = TargetConfig::new(name.clone());
         target.set_authentication(AuthenticationConfig::Chap(
@@ -816,14 +816,14 @@ durable-flush = true
         let mut target =
             TargetConfig::new(IscsiName::parse("iqn.2026-07.example.com:external-secret").unwrap());
         target.set_authentication(AuthenticationConfig::Chap(authentication));
-        let mut config = DaemonConfig::default();
+        let mut config = ServerConfig::default();
         config.add_target(target).unwrap();
 
         let path = directory.path("target.toml");
         config.save_to_file(&path).unwrap();
         let saved = fs::read_to_string(&path).unwrap();
         assert!(!saved.contains("sensitive-byte-sequence"));
-        assert_eq!(DaemonConfig::load_from_file(path).unwrap(), config);
+        assert_eq!(ServerConfig::load_from_file(path).unwrap(), config);
     }
 
     #[test]
@@ -832,7 +832,7 @@ durable-flush = true
         let oversized = directory.path("oversized.toml");
         fs::write(&oversized, vec![b' '; MAX_CONFIG_FILE_LENGTH + 1]).unwrap();
         assert!(matches!(
-            DaemonConfig::load_from_file(oversized),
+            ServerConfig::load_from_file(oversized),
             Err(ConfigFileError::FileTooLarge {
                 kind: ConfigFileKind::Configuration,
                 ..
@@ -842,7 +842,7 @@ durable-flush = true
         let unsupported = directory.path("unsupported.toml");
         fs::write(&unsupported, "version = 2\n").unwrap();
         assert!(matches!(
-            DaemonConfig::load_from_file(unsupported),
+            ServerConfig::load_from_file(unsupported),
             Err(ConfigFileError::UnsupportedVersion(2))
         ));
 
@@ -892,12 +892,12 @@ durable-flush = true
                 .add_lun(LunConfig::new(lun as u64, backend).unwrap())
                 .unwrap();
         }
-        let mut config = DaemonConfig::default();
+        let mut config = ServerConfig::default();
         config.add_target(target).unwrap();
         let path = directory.path("backends.toml");
         config.save_to_file(&path).unwrap();
 
-        assert_eq!(DaemonConfig::load_from_file(path).unwrap(), config);
+        assert_eq!(ServerConfig::load_from_file(path).unwrap(), config);
     }
 
     #[test]
@@ -908,7 +908,7 @@ durable-flush = true
         let path = directory.path("sample.toml");
         fs::write(&path, include_str!("../../../sample.toml")).unwrap();
 
-        let config = DaemonConfig::load_from_file(path).unwrap();
+        let config = ServerConfig::load_from_file(path).unwrap();
         assert_eq!(config.targets().len(), 1);
         let target = &config.targets()[0];
         assert_eq!(target.authentication(), &AuthenticationConfig::None);
@@ -955,7 +955,7 @@ virtual-disk-identity = true
         )
         .unwrap();
 
-        let config = DaemonConfig::load_from_file(path).unwrap();
+        let config = ServerConfig::load_from_file(path).unwrap();
         let backends: Vec<_> = config.targets()[0]
             .luns()
             .iter()

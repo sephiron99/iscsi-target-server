@@ -1,12 +1,12 @@
-//! `iscsi-targetd` — 설정 파일 기반 iSCSI Target daemon. 콘솔에서 foreground로 실행한다.
+//! `iscsi-targetd` — 설정 파일 기반 iSCSI Target server. 콘솔에서 foreground로 실행한다.
 //!
 //! stdout에는 기계가 읽는 상태 줄(`listening <address>`)과 `--check` 결과만 쓰고,
 //! 구조화된 로그는 전부 stderr로 보낸다.
 
 use std::process::ExitCode;
 
-use iscsi_target_server::daemon::{Daemon, DaemonError};
-use iscsi_target_server::{DaemonConfig, TargetServiceError};
+use iscsi_target_server::server::{Server, ServerError};
+use iscsi_target_server::{ServerConfig, TargetServiceError};
 
 mod cli;
 
@@ -34,7 +34,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let config = match DaemonConfig::load_from_file(&options.config_path) {
+    let config = match ServerConfig::load_from_file(&options.config_path) {
         Ok(config) => config,
         Err(error) => {
             tracing::error!(path = %options.config_path.display(), %error, "설정을 읽지 못했다");
@@ -58,14 +58,14 @@ fn main() -> ExitCode {
     };
 
     let result = runtime.block_on(async {
-        let daemon = Daemon::bind(&config).await?;
-        let address = daemon
+        let server = Server::bind(&config).await?;
+        let address = server
             .local_addr()
             .map_err(TargetServiceError::from)
-            .map_err(DaemonError::from)?;
+            .map_err(ServerError::from)?;
         println!("listening {address}");
         tracing::info!(%address, "Target service 시작");
-        daemon
+        server
             .run(async {
                 if let Err(error) = cli::shutdown_signal().await {
                     tracing::error!(%error, "signal handler를 등록하지 못해 종료한다");
@@ -86,7 +86,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
-            tracing::error!(%error, "daemon 오류로 종료한다");
+            tracing::error!(%error, "server 오류로 종료한다");
             ExitCode::FAILURE
         }
     }

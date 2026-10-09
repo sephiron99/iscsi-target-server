@@ -356,7 +356,7 @@ fn set_disk_offline(disk: &File, offline: bool) -> Result<(), StorageError> {
     device_io_control_input(disk, IOCTL_DISK_SET_DISK_ATTRIBUTES, &request)
 }
 
-/// offline attribute 하나만 바꾸는 요청. `Persist`를 끄므로 daemon이 비정상 종료해
+/// offline attribute 하나만 바꾸는 요청. `Persist`를 끄므로 server가 비정상 종료해
 /// 복원하지 못해도 재부팅하면 disk가 원래 상태로 돌아온다.
 fn disk_offline_request(offline: bool) -> Result<SET_DISK_ATTRIBUTES, StorageError> {
     Ok(SET_DISK_ATTRIBUTES {

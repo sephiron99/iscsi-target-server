@@ -1,4 +1,4 @@
-//! daemon, Target, LUN과 인증의 runtime 독립적인 설정 모델.
+//! server, Target, LUN과 인증의 runtime 독립적인 설정 모델.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -265,14 +265,14 @@ impl TargetConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DaemonConfig {
+pub struct ServerConfig {
     listen: ListenConfig,
     max_connections: usize,
     max_blocking_storage_operations: usize,
     targets: Vec<TargetConfig>,
 }
 
-impl DaemonConfig {
+impl ServerConfig {
     pub fn new(listen: ListenConfig, max_connections: usize) -> Result<Self, ConfigError> {
         if max_connections == 0 {
             return Err(ConfigError::InvalidConnectionLimit);
@@ -351,7 +351,7 @@ impl DaemonConfig {
     }
 }
 
-impl Default for DaemonConfig {
+impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             listen: ListenConfig::default(),
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn defaults_use_the_standard_port_and_require_a_target() {
-        let config = DaemonConfig::default();
+        let config = ServerConfig::default();
         assert_eq!(config.listen().port(), DEFAULT_ISCSI_PORT);
         assert_eq!(config.listen().address(), IpAddr::V6(Ipv6Addr::UNSPECIFIED));
         assert_eq!(config.validate(), Err(ConfigError::NoTargets));
@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn target_and_lun_identifiers_are_unique() {
-        let mut config = DaemonConfig::default();
+        let mut config = ServerConfig::default();
         let mut target = TargetConfig::new(target_name("disk"));
         target
             .add_lun(
