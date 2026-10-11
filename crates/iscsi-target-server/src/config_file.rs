@@ -512,10 +512,43 @@ fn safe_toml_reason(message: &str) -> String {
         .any(|prefix| message.starts_with(prefix))
     {
         // 문구가 여러 줄이면 첫 줄만 쓴다.
-        message.lines().next().unwrap_or_default().to_owned()
+        let mut reason = message.lines().next().unwrap_or_default().to_owned();
+        if is_lun_key_in_target_table(&reason) {
+            reason.push_str(
+                "; LUN keys belong under a `[[targets.luns]]` header - \
+                 is that line missing or commented out?",
+            );
+        }
+        reason
     } else {
         "invalid TOML syntax or value".to_owned()
     }
+}
+
+/// `[[targets.luns]]` 줄이 빠져 LUN의 key가 Target의 key로 읽힌 경우인지 본다.
+///
+/// 이때 parser는 `backend` 같은 올바른 key를 모르는 key라고만 하므로, 문구만으로는
+/// 무엇이 틀렸는지 알기 어렵다.
+fn is_lun_key_in_target_table(reason: &str) -> bool {
+    const LUN_KEYS: [&str; 10] = [
+        "lun",
+        "backend",
+        "block-size",
+        "block-count",
+        "path",
+        "read-only",
+        "durable-flush",
+        "device-number",
+        "drive-letter",
+        "virtual-disk-identity",
+    ];
+    let Some(field) = reason
+        .strip_prefix("unknown field `")
+        .and_then(|rest| rest.split('`').next())
+    else {
+        return false;
+    };
+    LUN_KEYS.contains(&field) && reason.contains("`luns`")
 }
 
 fn line_column(input: &str, byte_index: usize) -> (usize, usize) {
@@ -1031,7 +1064,20 @@ device-number = 2
         assert_eq!(
             error.to_string(),
             "configuration error at line 8, column 1: \
-             unknown field `backend`, expected one of `name`, `authentication`, `luns`"
+             unknown field `backend`, expected one of `name`, `authentication`, `luns`; \
+             LUN keys belong under a `[[targets.luns]]` header - \
+             is that line missing or commented out?"
+        );
+
+        // LUN의 key가 아니면 hint를 붙이지 않는다.
+        let error = load_error(
+            "unknown-target-key",
+            "version = 1\n\n[[targets]]\nname = \"iqn.2026-07.example.com:disk\"\nalias = 1\n",
+        );
+        assert_eq!(
+            error.to_string(),
+            "configuration error at line 5, column 1: \
+             unknown field `alias`, expected one of `name`, `authentication`, `luns`"
         );
     }
 
