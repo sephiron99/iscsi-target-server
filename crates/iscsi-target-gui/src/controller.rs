@@ -12,7 +12,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::mpsc as std_mpsc;
 use std::thread::JoinHandle;
 
@@ -102,7 +101,7 @@ impl LunView {
 }
 
 enum Command {
-    Start { config_path: PathBuf },
+    Start { config: Box<ServerConfig> },
     Stop,
 }
 
@@ -131,9 +130,11 @@ impl Controller {
         })
     }
 
-    /// 설정 파일을 읽어 서버를 띄우라고 요청한다. 이미 떠 있으면 무시된다.
-    pub fn start(&self, config_path: PathBuf) {
-        self.send(Command::Start { config_path });
+    /// 이 설정으로 서버를 띄우라고 요청한다. 이미 떠 있으면 무시된다.
+    pub fn start(&self, config: ServerConfig) {
+        self.send(Command::Start {
+            config: Box::new(config),
+        });
     }
 
     /// 서버를 내리라고 요청한다. 떠 있지 않으면 무시된다.
@@ -198,12 +199,12 @@ async fn run(mut commands: mpsc::UnboundedReceiver<Command>, events: std_mpsc::S
     loop {
         tokio::select! {
             command = commands.recv() => match command {
-                Some(Command::Start { config_path }) => {
+                Some(Command::Start { config }) => {
                     if running.is_some() {
                         continue;
                     }
                     emit(Event::Starting);
-                    match start(config_path).await {
+                    match start(&config).await {
                         Ok((started, address, targets)) => {
                             running = Some(started);
                             emit(Event::Started { address, targets });
@@ -248,21 +249,15 @@ fn outcome(result: Result<ServerResult, tokio::task::JoinError>) -> Event {
     }
 }
 
-async fn start(config_path: PathBuf) -> Result<(Running, SocketAddr, Vec<TargetView>), String> {
-    // 설정과 secret 파일을 읽는 것은 blocking I/O라 runtime worker를 막지 않게 한다.
-    let config = tokio::task::spawn_blocking(move || ServerConfig::load_from_file(&config_path))
-        .await
-        .map_err(|error| format!("could not load the configuration: {error}"))?
-        .map_err(|error| format!("could not load the configuration: {error}"))?;
-
-    let server = Server::bind(&config)
+async fn start(config: &ServerConfig) -> Result<(Running, SocketAddr, Vec<TargetView>), String> {
+    let server = Server::bind(config)
         .await
         .map_err(|error| error.to_string())?;
     let address = server
         .local_addr()
         .map_err(TargetServiceError::from)
         .map_err(|error| error.to_string())?;
-    let targets = target_views(&config, &server)?;
+    let targets = target_views(config, &server)?;
 
     let (stop_sender, stop_receiver) = oneshot::channel::<()>();
     let task = tokio::spawn(server.run(async move {
@@ -324,7 +319,7 @@ fn describe_authentication(policy: AuthenticationPolicy) -> &'static str {
     }
 }
 
-fn describe_backend(backend: &LunBackendConfig) -> String {
+pub fn describe_backend(backend: &LunBackendConfig) -> String {
     match backend {
         LunBackendConfig::Memory { .. } => "Memory".to_owned(),
         LunBackendConfig::File { path, .. } => format!("File {}", path.display()),
@@ -340,52 +335,31 @@ fn describe_backend(backend: &LunBackendConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iscsi_target_server::{IscsiName, ListenConfig, LunConfig, TargetConfig};
     use std::time::{Duration, Instant};
 
     const TARGET_NAME: &str = "iqn.2026-10.example.com:gui";
 
-    struct TestDirectory(PathBuf);
-
-    impl TestDirectory {
-        fn new(label: &str) -> Self {
-            let path = std::env::temp_dir()
-                .join(format!("iscsi-target-gui-{label}-{}", std::process::id()));
-            std::fs::create_dir_all(&path).unwrap();
-            Self(path)
-        }
-
-        fn write_config(&self, port: u16) -> PathBuf {
-            let path = self.0.join("server.toml");
-            std::fs::write(
-                &path,
-                format!(
-                    r#"version = 1
-
-[listen]
-address = "127.0.0.1"
-port = {port}
-
-[[targets]]
-name = "{TARGET_NAME}"
-
-[[targets.luns]]
-lun = 3
-backend = "memory"
-block-size = 512
-block-count = 64
-read-only = true
-"#
-                ),
+    fn config(port: u16) -> ServerConfig {
+        let name = IscsiName::parse(TARGET_NAME).unwrap();
+        let mut target = TargetConfig::new(name);
+        target
+            .add_lun(
+                LunConfig::new(
+                    3,
+                    LunBackendConfig::Memory {
+                        block_size: 512,
+                        block_count: 64,
+                        read_only: true,
+                    },
+                )
+                .unwrap(),
             )
             .unwrap();
-            path
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
+        let listen = ListenConfig::new("127.0.0.1".parse().unwrap(), port).unwrap();
+        let mut config = ServerConfig::new(listen, 4).unwrap();
+        config.add_target(target).unwrap();
+        config
     }
 
     fn free_port() -> u16 {
@@ -409,11 +383,10 @@ read-only = true
 
     #[test]
     fn start_reports_the_listening_target_and_stop_reports_the_summary() {
-        let directory = TestDirectory::new("start-stop");
         let port = free_port();
         let controller = Controller::spawn().unwrap();
 
-        controller.start(directory.write_config(port));
+        controller.start(config(port));
         assert_eq!(next_event(&controller), Event::Starting);
         let Event::Started { address, targets } = next_event(&controller) else {
             panic!("expected Started");
@@ -441,51 +414,49 @@ read-only = true
         assert!(matches!(next_event(&controller), Event::Stopped(_)));
 
         // 내린 뒤에는 같은 port로 다시 띄울 수 있다.
-        controller.start(directory.write_config(port));
+        controller.start(config(port));
         assert_eq!(next_event(&controller), Event::Starting);
         assert!(matches!(next_event(&controller), Event::Started { .. }));
     }
 
     #[test]
-    fn unreadable_configuration_fails_the_start_and_leaves_the_controller_usable() {
-        let directory = TestDirectory::new("start-failed");
+    fn invalid_configuration_fails_the_start_and_leaves_the_controller_usable() {
         let controller = Controller::spawn().unwrap();
 
-        controller.start(directory.0.join("missing.toml"));
+        // Target이 없는 설정은 listen하기 전에 거절된다.
+        controller.start(ServerConfig::default());
         assert_eq!(next_event(&controller), Event::Starting);
-        let Event::StartFailed(message) = next_event(&controller) else {
-            panic!("expected StartFailed");
-        };
-        assert!(message.starts_with("could not load the configuration: "));
+        assert_eq!(
+            next_event(&controller),
+            Event::StartFailed("configuration must contain at least one Target".to_owned())
+        );
 
-        controller.start(directory.write_config(free_port()));
+        controller.start(config(free_port()));
         assert_eq!(next_event(&controller), Event::Starting);
         assert!(matches!(next_event(&controller), Event::Started { .. }));
     }
 
     #[test]
     fn port_already_in_use_fails_the_start() {
-        let directory = TestDirectory::new("port-in-use");
         let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let controller = Controller::spawn().unwrap();
 
-        controller.start(directory.write_config(occupied.local_addr().unwrap().port()));
+        controller.start(config(occupied.local_addr().unwrap().port()));
         assert_eq!(next_event(&controller), Event::Starting);
         assert!(matches!(next_event(&controller), Event::StartFailed(_)));
     }
 
     #[test]
     fn start_while_running_and_stop_while_stopped_are_ignored() {
-        let directory = TestDirectory::new("ignored-commands");
-        let config_path = directory.write_config(free_port());
+        let server_config = config(free_port());
         let controller = Controller::spawn().unwrap();
 
         controller.stop();
-        controller.start(config_path.clone());
+        controller.start(server_config.clone());
         assert_eq!(next_event(&controller), Event::Starting);
         assert!(matches!(next_event(&controller), Event::Started { .. }));
 
-        controller.start(config_path);
+        controller.start(server_config);
         controller.stop();
         controller.stop();
         assert_eq!(next_event(&controller), Event::Stopping);
@@ -496,11 +467,10 @@ read-only = true
 
     #[test]
     fn shutdown_stops_a_running_server_and_releases_the_port() {
-        let directory = TestDirectory::new("shutdown");
         let port = free_port();
         let controller = Controller::spawn().unwrap();
 
-        controller.start(directory.write_config(port));
+        controller.start(config(port));
         assert_eq!(next_event(&controller), Event::Starting);
         assert!(matches!(next_event(&controller), Event::Started { .. }));
 
@@ -510,7 +480,7 @@ read-only = true
         std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
 
         // 내린 뒤의 명령과 두 번째 shutdown은 아무 일도 하지 않는다.
-        controller.start(directory.write_config(port));
+        controller.start(config(port));
         controller.shutdown();
         assert_eq!(controller.try_event(), None);
     }

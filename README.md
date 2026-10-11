@@ -171,8 +171,8 @@ virtual-disk-identity = true
 - Windows 10 and 11 are the only supported platforms for the server.
 - One target per server. Use several LUNs to export several disks.
 - No VHD or VMDK support.
-- The GUI only starts and stops the server from a configuration file; it cannot edit
-  the configuration or list sessions yet. No Windows service integration.
+- The GUI edits the Target name, listen address and LUNs, but it cannot edit CHAP
+  settings, create image files or list sessions yet. No Windows service integration.
 - Error recovery level 0 only, and one connection per session.
 - No session reinstatement. Each TCP connection is its own session.
 
@@ -185,7 +185,7 @@ not depend on each other; both use the library.
 |---|---|---|
 | `crates/iscsi-target-server` | Library | Protocol, SCSI, storage backends, configuration, management API, Tokio service |
 | `crates/iscsi-targetd` | Executable | Command-line server: arguments, log output, Ctrl+C |
-| `crates/iscsi-target-gui` | Executable | Windows GUI. Starts and stops the server from a configuration file and shows its LUNs and log |
+| `crates/iscsi-target-gui` | Executable | Windows GUI. Edits and saves the configuration, starts and stops the server and shows its log |
 
 By role the library falls into four layers, and upper layers depend on lower ones.
 

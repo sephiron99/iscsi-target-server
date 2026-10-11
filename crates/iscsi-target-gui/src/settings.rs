@@ -1,0 +1,586 @@
+//! 창에서 고치는 설정의 model.
+//!
+//! [`Settings`]는 화면의 입력 칸과 LUN 목록이 담는 값이고, 서버를 시작하거나 저장할 때
+//! 라이브러리의 [`ServerConfig`]로 바꾼다. [`LunForm`]은 LUN dialog의 입력 칸이 담는
+//! 값이다. 둘 다 입력을 글자 그대로 들고 있다가 바꿀 때 검증하므로, 검증 규칙과 오류
+//! 문구를 창 없이 테스트할 수 있다.
+//!
+//! 서버가 Target 하나만 허용하므로 model에도 Target은 하나다. CHAP 인증은 아직 창에서
+//! 고치지 못하고, 읽어 온 설정의 것을 그대로 지닌다.
+
+use std::net::IpAddr;
+use std::path::PathBuf;
+
+use iscsi_target_server::config::{
+    DEFAULT_ISCSI_PORT, DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS, DEFAULT_MAX_SERVICE_CONNECTIONS,
+};
+use iscsi_target_server::{
+    AuthenticationConfig, IscsiName, ListenConfig, LunBackendConfig, LunConfig, ServerConfig,
+    TargetConfig,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Settings {
+    pub target_name: String,
+    pub listen_address: String,
+    pub listen_port: String,
+    /// LUN 번호 순서로 둔다.
+    luns: Vec<LunConfig>,
+    authentication: AuthenticationConfig,
+    max_connections: usize,
+    max_blocking_storage_operations: usize,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            target_name: String::new(),
+            listen_address: "0.0.0.0".to_owned(),
+            listen_port: DEFAULT_ISCSI_PORT.to_string(),
+            luns: Vec::new(),
+            authentication: AuthenticationConfig::None,
+            max_connections: DEFAULT_MAX_SERVICE_CONNECTIONS,
+            max_blocking_storage_operations: DEFAULT_MAX_BLOCKING_STORAGE_OPERATIONS,
+        }
+    }
+}
+
+impl Settings {
+    /// 읽어 온 설정을 창에서 고칠 수 있는 모양으로 바꾼다.
+    pub fn from_config(config: &ServerConfig) -> Result<Self, String> {
+        let [target] = config.targets() else {
+            return Err(format!(
+                "the server supports exactly one Target; the configuration has {}",
+                config.targets().len()
+            ));
+        };
+        let mut luns = target.luns().to_vec();
+        luns.sort_by_key(LunConfig::lun);
+        Ok(Self {
+            target_name: target.name().as_str().to_owned(),
+            listen_address: config.listen().address().to_string(),
+            listen_port: config.listen().port().to_string(),
+            luns,
+            authentication: target.authentication().clone(),
+            max_connections: config.max_connections(),
+            max_blocking_storage_operations: config.max_blocking_storage_operations(),
+        })
+    }
+
+    /// 입력을 검증해 서버가 쓰는 설정으로 바꾼다.
+    pub fn to_config(&self) -> Result<ServerConfig, String> {
+        let name = self.target_name.trim();
+        if name.is_empty() {
+            return Err("Enter the Target name, for example iqn.2026-10.local.test:disk.".into());
+        }
+        let name = IscsiName::parse(name)
+            .map_err(|error| format!("The Target name is not valid: {error}"))?;
+        let address: IpAddr = self
+            .listen_address
+            .trim()
+            .parse()
+            .map_err(|_| "The listen address must be an IPv4 or IPv6 address.".to_owned())?;
+        let port: u16 = self
+            .listen_port
+            .trim()
+            .parse()
+            .ok()
+            .filter(|port| *port != 0)
+            .ok_or_else(|| "The port must be a number from 1 to 65535.".to_owned())?;
+        if self.luns.is_empty() {
+            return Err("Add at least one LUN.".into());
+        }
+
+        let mut target = TargetConfig::new(name);
+        target.set_authentication(self.authentication.clone());
+        for lun in &self.luns {
+            target
+                .add_lun(lun.clone())
+                .map_err(|error| error.to_string())?;
+        }
+        let listen = ListenConfig::new(address, port).map_err(|error| error.to_string())?;
+        let mut config =
+            ServerConfig::new(listen, self.max_connections).map_err(|error| error.to_string())?;
+        config
+            .set_max_blocking_storage_operations(self.max_blocking_storage_operations)
+            .map_err(|error| error.to_string())?;
+        config
+            .add_target(target)
+            .map_err(|error| error.to_string())?;
+        config.validate().map_err(|error| error.to_string())?;
+        Ok(config)
+    }
+
+    pub fn luns(&self) -> &[LunConfig] {
+        &self.luns
+    }
+
+    /// LUN을 넣는다. `replacing`이 있으면 그 번호의 LUN을 바꾸는 것이고, 없으면 새로
+    /// 더하는 것이다. 다른 LUN과 번호가 겹치면 거절한다.
+    pub fn put_lun(&mut self, replacing: Option<u64>, lun: LunConfig) -> Result<(), String> {
+        let taken = self
+            .luns
+            .iter()
+            .any(|existing| existing.lun() == lun.lun() && Some(existing.lun()) != replacing);
+        if taken {
+            return Err(format!("LUN {} already exists.", lun.lun()));
+        }
+        if let Some(replacing) = replacing {
+            self.luns.retain(|existing| existing.lun() != replacing);
+        }
+        self.luns.push(lun);
+        self.luns.sort_by_key(LunConfig::lun);
+        Ok(())
+    }
+
+    pub fn remove_lun(&mut self, lun: u64) {
+        self.luns.retain(|existing| existing.lun() != lun);
+    }
+
+    /// 아직 쓰지 않은 가장 작은 LUN 번호.
+    pub fn next_free_lun(&self) -> u64 {
+        (0..)
+            .find(|candidate| self.luns.iter().all(|lun| lun.lun() != *candidate))
+            .unwrap_or_default()
+    }
+
+    pub fn authentication_label(&self) -> String {
+        match &self.authentication {
+            AuthenticationConfig::None => "none".to_owned(),
+            AuthenticationConfig::Chap(chap) => format!("CHAP required, user {}", chap.username()),
+            AuthenticationConfig::PreferChap(chap) => {
+                format!("CHAP preferred, user {}", chap.username())
+            }
+        }
+    }
+}
+
+/// LUN dialog에서 고르는 backend 종류.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendKind {
+    File,
+    PhysicalDrive,
+    Volume,
+    Memory,
+}
+
+impl BackendKind {
+    /// dialog의 목록에 보이는 순서.
+    pub const ALL: [Self; 4] = [Self::File, Self::PhysicalDrive, Self::Volume, Self::Memory];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::File => "Image file",
+            Self::PhysicalDrive => "Physical drive",
+            Self::Volume => "Volume (drive letter)",
+            Self::Memory => "Memory (lost when the server stops)",
+        }
+    }
+
+    pub fn index(self) -> u32 {
+        Self::ALL
+            .iter()
+            .position(|kind| *kind == self)
+            .unwrap_or_default() as u32
+    }
+
+    pub fn from_index(index: u32) -> Option<Self> {
+        Self::ALL.get(index as usize).copied()
+    }
+
+    pub fn uses_path(self) -> bool {
+        self == Self::File
+    }
+
+    pub fn uses_block_size(self) -> bool {
+        matches!(self, Self::File | Self::Memory)
+    }
+
+    pub fn uses_block_count(self) -> bool {
+        self == Self::Memory
+    }
+
+    pub fn uses_device_number(self) -> bool {
+        self == Self::PhysicalDrive
+    }
+
+    pub fn uses_drive_letter(self) -> bool {
+        self == Self::Volume
+    }
+
+    pub fn uses_durable_flush(self) -> bool {
+        self == Self::File
+    }
+
+    pub fn uses_virtual_disk_identity(self) -> bool {
+        self == Self::PhysicalDrive
+    }
+}
+
+/// LUN dialog의 입력 칸. 고른 backend가 쓰지 않는 칸의 값은 무시한다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LunForm {
+    pub lun: String,
+    pub kind: BackendKind,
+    pub path: String,
+    pub block_size: String,
+    pub block_count: String,
+    pub device_number: String,
+    pub drive_letter: String,
+    pub read_only: bool,
+    pub durable_flush: bool,
+    pub virtual_disk_identity: bool,
+}
+
+impl LunForm {
+    /// 새 LUN을 더할 때의 처음 값.
+    pub fn new(lun: u64) -> Self {
+        Self {
+            lun: lun.to_string(),
+            kind: BackendKind::File,
+            path: String::new(),
+            block_size: "512".to_owned(),
+            block_count: String::new(),
+            device_number: String::new(),
+            drive_letter: String::new(),
+            read_only: false,
+            durable_flush: true,
+            virtual_disk_identity: false,
+        }
+    }
+
+    pub fn from_config(config: &LunConfig) -> Self {
+        let mut form = Self::new(config.lun());
+        match config.backend() {
+            LunBackendConfig::Memory {
+                block_size,
+                block_count,
+                read_only,
+            } => {
+                form.kind = BackendKind::Memory;
+                form.block_size = block_size.to_string();
+                form.block_count = block_count.to_string();
+                form.read_only = *read_only;
+            }
+            LunBackendConfig::File {
+                path,
+                block_size,
+                read_only,
+                durable_flush,
+            } => {
+                form.kind = BackendKind::File;
+                form.path = path.to_string_lossy().into_owned();
+                form.block_size = block_size.to_string();
+                form.read_only = *read_only;
+                form.durable_flush = *durable_flush;
+            }
+            LunBackendConfig::WindowsPhysicalDrive {
+                device_number,
+                read_only,
+                virtual_disk_identity,
+            } => {
+                form.kind = BackendKind::PhysicalDrive;
+                form.device_number = device_number.to_string();
+                form.read_only = *read_only;
+                form.virtual_disk_identity = *virtual_disk_identity;
+            }
+            LunBackendConfig::WindowsVolume {
+                drive_letter,
+                read_only,
+            } => {
+                form.kind = BackendKind::Volume;
+                form.drive_letter = drive_letter.to_ascii_uppercase().to_string();
+                form.read_only = *read_only;
+            }
+        }
+        form
+    }
+
+    /// 입력을 검증해 LUN 설정으로 바꾼다.
+    pub fn to_config(&self) -> Result<LunConfig, String> {
+        let lun: u64 = parse_number(&self.lun, "The LUN number")?;
+        let backend = match self.kind {
+            BackendKind::File => {
+                let path = self.path.trim();
+                if path.is_empty() {
+                    return Err("Choose the image file.".into());
+                }
+                LunBackendConfig::File {
+                    path: PathBuf::from(path),
+                    block_size: parse_number(&self.block_size, "The block size")?,
+                    read_only: self.read_only,
+                    durable_flush: self.durable_flush,
+                }
+            }
+            BackendKind::PhysicalDrive => LunBackendConfig::WindowsPhysicalDrive {
+                device_number: parse_number(&self.device_number, "The device number")?,
+                read_only: self.read_only,
+                virtual_disk_identity: self.virtual_disk_identity,
+            },
+            BackendKind::Volume => LunBackendConfig::WindowsVolume {
+                drive_letter: parse_drive_letter(&self.drive_letter)?,
+                read_only: self.read_only,
+            },
+            BackendKind::Memory => LunBackendConfig::Memory {
+                block_size: parse_number(&self.block_size, "The block size")?,
+                block_count: parse_number(&self.block_count, "The block count")?,
+                read_only: self.read_only,
+            },
+        };
+        LunConfig::new(lun, backend).map_err(|error| match error {
+            iscsi_target_server::ConfigError::InvalidBlockGeometry { .. } => {
+                "The block size and block count must be greater than zero.".to_owned()
+            }
+            other => {
+                let mut message = other.to_string();
+                // 라이브러리 문구는 소문자로 시작한다. dialog에는 문장으로 보인다.
+                if let Some(first) = message.get_mut(..1) {
+                    first.make_ascii_uppercase();
+                }
+                message.push('.');
+                message
+            }
+        })
+    }
+}
+
+fn parse_number<T: std::str::FromStr>(text: &str, what: &str) -> Result<T, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(format!("{what} is required."));
+    }
+    text.parse()
+        .map_err(|_| format!("{what} must be a whole number in range."))
+}
+
+/// `E`와 `E:`를 모두 받는다.
+fn parse_drive_letter(text: &str) -> Result<char, String> {
+    let text = text.trim();
+    let text = text.strip_suffix(':').unwrap_or(text);
+    let mut characters = text.chars();
+    match (characters.next(), characters.next()) {
+        (Some(letter), None) if letter.is_ascii_alphabetic() => Ok(letter.to_ascii_uppercase()),
+        _ => Err("The drive letter must be a single letter such as E.".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 입력을 한 군데 망가뜨리는 함수와, 그때 나와야 하는 오류 문구.
+    type Case<T> = (fn(&mut T), &'static str);
+
+    fn memory_lun(lun: u64) -> LunConfig {
+        LunConfig::new(
+            lun,
+            LunBackendConfig::Memory {
+                block_size: 512,
+                block_count: 64,
+                read_only: false,
+            },
+        )
+        .unwrap()
+    }
+
+    fn valid_settings() -> Settings {
+        let mut settings = Settings {
+            target_name: " iqn.2026-10.example.com:disk ".to_owned(),
+            listen_address: "127.0.0.1".to_owned(),
+            listen_port: " 3261 ".to_owned(),
+            ..Settings::default()
+        };
+        settings.put_lun(None, memory_lun(1)).unwrap();
+        settings
+    }
+
+    #[test]
+    fn settings_become_a_configuration_and_come_back_unchanged() {
+        let config = valid_settings().to_config().unwrap();
+        assert_eq!(config.listen().socket_addr().to_string(), "127.0.0.1:3261");
+        let [target] = config.targets() else {
+            panic!("expected one Target");
+        };
+        assert_eq!(target.name().as_str(), "iqn.2026-10.example.com:disk");
+        assert_eq!(target.luns(), [memory_lun(1)]);
+
+        let reloaded = Settings::from_config(&config).unwrap();
+        assert_eq!(reloaded.target_name, "iqn.2026-10.example.com:disk");
+        assert_eq!(reloaded.listen_port, "3261");
+        assert_eq!(reloaded.to_config().unwrap(), config);
+    }
+
+    #[test]
+    fn invalid_settings_are_rejected_with_a_message_for_the_field() {
+        let cases: [Case<Settings>; 6] = [
+            (|s| s.target_name = "  ".into(), "Enter the Target name"),
+            (
+                |s| s.target_name = "not an iqn".into(),
+                "The Target name is not valid",
+            ),
+            (
+                |s| s.listen_address = "localhost".into(),
+                "The listen address must be",
+            ),
+            (|s| s.listen_port = "0".into(), "The port must be"),
+            (|s| s.listen_port = "65536".into(), "The port must be"),
+            (|s| s.remove_lun(1), "Add at least one LUN."),
+        ];
+        for (change, expected) in cases {
+            let mut settings = valid_settings();
+            change(&mut settings);
+            let error = settings.to_config().unwrap_err();
+            assert!(error.starts_with(expected), "{error:?} vs {expected:?}");
+        }
+    }
+
+    #[test]
+    fn configurations_without_exactly_one_target_cannot_be_edited() {
+        let error = Settings::from_config(&ServerConfig::default()).unwrap_err();
+        assert_eq!(
+            error,
+            "the server supports exactly one Target; the configuration has 0"
+        );
+    }
+
+    #[test]
+    fn luns_stay_sorted_and_numbers_cannot_collide() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.next_free_lun(), 0);
+        settings.put_lun(None, memory_lun(2)).unwrap();
+        settings.put_lun(None, memory_lun(0)).unwrap();
+        assert_eq!(settings.next_free_lun(), 1);
+        assert_eq!(
+            settings.put_lun(None, memory_lun(2)).unwrap_err(),
+            "LUN 2 already exists."
+        );
+
+        // 같은 번호로 고치는 것과 빈 번호로 옮기는 것은 된다.
+        settings.put_lun(Some(2), memory_lun(2)).unwrap();
+        settings.put_lun(Some(2), memory_lun(1)).unwrap();
+        assert_eq!(
+            settings
+                .luns()
+                .iter()
+                .map(LunConfig::lun)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        // 다른 LUN이 쓰는 번호로는 옮기지 못하고, 실패하면 그대로 남는다.
+        assert_eq!(
+            settings.put_lun(Some(1), memory_lun(0)).unwrap_err(),
+            "LUN 0 already exists."
+        );
+        assert_eq!(settings.luns().len(), 2);
+
+        settings.remove_lun(0);
+        assert_eq!(settings.next_free_lun(), 0);
+    }
+
+    #[test]
+    fn every_backend_round_trips_through_the_form() {
+        let backends = [
+            LunBackendConfig::Memory {
+                block_size: 4096,
+                block_count: 256,
+                read_only: true,
+            },
+            LunBackendConfig::File {
+                path: PathBuf::from(r"C:\images\disk.img"),
+                block_size: 512,
+                read_only: false,
+                durable_flush: false,
+            },
+            LunBackendConfig::WindowsPhysicalDrive {
+                device_number: 2,
+                read_only: false,
+                virtual_disk_identity: true,
+            },
+            LunBackendConfig::WindowsVolume {
+                drive_letter: 'E',
+                read_only: true,
+            },
+        ];
+        for (lun, backend) in backends.into_iter().enumerate() {
+            let config = LunConfig::new(lun as u64, backend).unwrap();
+            let form = LunForm::from_config(&config);
+            assert_eq!(BackendKind::from_index(form.kind.index()), Some(form.kind));
+            assert_eq!(form.to_config().unwrap(), config);
+        }
+        assert_eq!(BackendKind::from_index(4), None);
+    }
+
+    #[test]
+    fn form_ignores_fields_of_other_backends_and_accepts_loose_input() {
+        let mut form = LunForm::new(3);
+        form.kind = BackendKind::Volume;
+        form.drive_letter = " e: ".to_owned();
+        form.block_size = "not a number".to_owned();
+        form.path = "ignored".to_owned();
+        assert_eq!(
+            form.to_config().unwrap(),
+            LunConfig::new(
+                3,
+                LunBackendConfig::WindowsVolume {
+                    drive_letter: 'E',
+                    read_only: false,
+                },
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn invalid_form_input_is_rejected_with_a_message_for_the_field() {
+        let cases: [Case<LunForm>; 9] = [
+            (|f| f.lun = "".into(), "The LUN number is required."),
+            (
+                |f| f.lun = "-1".into(),
+                "The LUN number must be a whole number in range.",
+            ),
+            (
+                |f| f.lun = "16384".into(),
+                "LUN 16384 is outside the supported range 0..=16383.",
+            ),
+            (|f| f.path = " ".into(), "Choose the image file."),
+            (
+                |f| f.block_size = "0".into(),
+                "The block size and block count must be greater than zero.",
+            ),
+            (
+                |f| {
+                    f.kind = BackendKind::Memory;
+                    f.block_count = "".into();
+                },
+                "The block count is required.",
+            ),
+            (
+                |f| {
+                    f.kind = BackendKind::PhysicalDrive;
+                    f.device_number = "4294967296".into();
+                },
+                "The device number must be a whole number in range.",
+            ),
+            (
+                |f| {
+                    f.kind = BackendKind::Volume;
+                    f.drive_letter = "EF".into();
+                },
+                "The drive letter must be a single letter such as E.",
+            ),
+            (
+                |f| {
+                    f.kind = BackendKind::Volume;
+                    f.drive_letter = "1".into();
+                },
+                "The drive letter must be a single letter such as E.",
+            ),
+        ];
+        for (change, expected) in cases {
+            let mut form = LunForm::new(0);
+            form.path = r"C:\images\disk.img".to_owned();
+            change(&mut form);
+            assert_eq!(form.to_config().unwrap_err(), expected);
+        }
+    }
+}

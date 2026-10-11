@@ -6,7 +6,9 @@
 //!
 //! - [`controller`]: 서버 시작/중지 명령을 받아 실행하고 결과를 event로 돌려준다
 //! - [`logging`]: `tracing` 로그를 창의 로그 영역으로 넘긴다
-//! - `window`: WinSafe 창과 control. Windows target에서만 컴파일한다
+//! - [`settings`]: 창에서 고치는 설정의 model과 입력 검증
+//! - `window`, `lun_dialog`, `file_dialog`, `controls`: WinSafe 창과 dialog. Windows target에서만
+//!   컴파일한다
 
 // 콘솔 창 없이 실행한다.
 #![cfg_attr(windows, windows_subsystem = "windows")]
@@ -15,8 +17,16 @@ use std::process::ExitCode;
 
 #[cfg_attr(not(windows), allow(dead_code))]
 mod controller;
+#[cfg(windows)]
+mod controls;
+#[cfg(windows)]
+mod file_dialog;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod logging;
+#[cfg(windows)]
+mod lun_dialog;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod settings;
 #[cfg(windows)]
 mod window;
 

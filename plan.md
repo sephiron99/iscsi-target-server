@@ -195,15 +195,15 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 
 ### 화면과 기능
 
-- [x] 메인 창: 서버 실행/중지, listen 주소와 전체 상태. 설정 파일을 골라 시작하며, 실행 중인 Target과 LUN 목록(backend, 용량, block size, 접근 방식)을 읽기 전용으로 보여 준다
-- [ ] Target 목록: IQN, 활성 여부, 인증 정책 추가/수정/삭제
-- [ ] LUN 관리: backend 선택, LUN 번호, 용량, block size, read-only 설정
-- [ ] 이미지 파일 선택과 새 raw image 생성 dialog
+- [x] 메인 창: 서버 실행/중지, listen 주소와 전체 상태. 창이 들고 있는 설정으로 시작하며, 서버가 도는 동안은 설정을 고칠 수 없다
+- [-] Target 설정: 서버가 단일 Target만 허용하므로 목록이 아니라 Target 하나의 IQN과 listen 주소/port를 입력 칸으로 고친다. 인증 정책은 읽어 온 값을 보여 주기만 하고 편집은 아래 CHAP 항목에서 한다
+- [x] LUN 관리: backend 선택(image file, physical drive, volume, memory), LUN 번호, block size/count, read-only, durable flush, virtual disk identity. 추가/수정/삭제는 `lun_dialog`의 modal dialog로 하고 입력 검증은 `settings`에 있다. 용량은 memory가 아니면 서버가 backend를 연 뒤에 표시한다. physical drive는 disk 번호를 직접 입력한다(열거 API가 생기면 목록에서 고르게 바꾼다)
+- [-] 이미지 파일 선택과 새 raw image 생성 dialog. 이미 있는 파일 선택은 된다. 새 image 생성은 아직 없다
 - [ ] active Session/Connection 목록과 상세 상태
 - [ ] 관리자가 선택한 Session/Connection 종료
 - [ ] discovery 설정과 CHAP credential 관리
 - [x] 상태 bar, 오류 dialog와 최근 event/log 표시. 로그는 최근 2000줄까지 남긴다
-- [ ] 설정 저장, 다시 읽기와 종료 전 변경 확인
+- [x] 설정 저장, 다시 읽기와 종료 전 변경 확인. New/Open/Save/Save As가 있고 저장하지 않은 변경은 제목의 `*`로 보인다. 읽어 온 파일을 처음 덮어쓸 때는 주석과 원래 배치가 사라진다고 경고한다
 - [ ] DPI scaling, keyboard navigation, tab order와 긴 한글/영문 문자열 표시
 
 ### 검증

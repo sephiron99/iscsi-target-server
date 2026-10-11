@@ -42,7 +42,7 @@
 |---|---|---|
 | `crates/iscsi-target-server` | 라이브러리 | 프로토콜, SCSI, Storage backend, 설정, 관리 API, Tokio 서비스 |
 | `crates/iscsi-targetd` | 실행 파일 | 명령줄 인자, 로그 출력, Ctrl+C. 콘솔에서 foreground로만 실행한다 |
-| `crates/iscsi-target-gui` | 실행 파일 | WinSafe 기반 Windows GUI. 설정 파일을 골라 서버를 시작/중지하고 상태, LUN과 로그를 보여 준다. 설정 편집과 Session 관리는 아직 없다 |
+| `crates/iscsi-target-gui` | 실행 파일 | WinSafe 기반 Windows GUI. Target 이름, listen 주소와 LUN을 고치고 설정 파일로 읽고 저장하며, 서버를 시작/중지하고 상태와 로그를 보여 준다. CHAP 편집과 Session 관리는 아직 없다 |
 
 GUI의 의존성은 `iscsi-target-gui`에만 둔다. 라이브러리와 `iscsi-targetd`가 GUI 의존성을 갖게 만들지 않는다. Windows 서비스 등록 같은 background 실행 방식은 고려하지 않는다.
 
