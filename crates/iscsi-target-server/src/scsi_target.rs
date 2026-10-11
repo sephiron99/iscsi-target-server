@@ -78,8 +78,7 @@ pub enum StorageError {
     Io(#[from] StorageIoError),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("storage {operation} failed with {kind:?} (OS error {raw_os_error:?})")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StorageIoError {
     operation: StorageIoOperation,
     kind: std::io::ErrorKind,
@@ -99,6 +98,22 @@ impl StorageIoError {
         self.raw_os_error
     }
 }
+
+impl std::fmt::Display for StorageIoError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "storage {} failed: {}",
+            self.operation, self.kind
+        )?;
+        if let Some(code) = self.raw_os_error {
+            write!(formatter, " (OS error {code})")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for StorageIoError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum StorageIoOperation {

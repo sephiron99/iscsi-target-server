@@ -183,6 +183,22 @@ impl LunBackendConfig {
     }
 }
 
+/// 로그와 오류 문구에서 backend를 가리키는 짧은 이름. 예: `physical drive 2`.
+impl fmt::Display for LunBackendConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Memory { .. } => formatter.write_str("memory"),
+            Self::File { path, .. } => write!(formatter, "file {}", path.display()),
+            Self::WindowsPhysicalDrive { device_number, .. } => {
+                write!(formatter, "physical drive {device_number}")
+            }
+            Self::WindowsVolume { drive_letter, .. } => {
+                write!(formatter, "volume {}:", drive_letter.to_ascii_uppercase())
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LunConfig {
     lun: u64,

@@ -54,7 +54,7 @@ impl TargetServiceApi {
         target.set_identity_namespace(config.name().as_str());
         for lun in config.luns() {
             target
-                .add_boxed_lun(lun.lun(), build_backend(lun.backend())?)
+                .add_boxed_lun(lun.lun(), open_backend(lun)?)
                 .map_err(SharedScsiTargetError::from)?;
         }
         let managed = ManagedTarget {
@@ -92,7 +92,7 @@ impl TargetServiceApi {
             }
         }
 
-        let backend = build_backend(lun.backend())?;
+        let backend = open_backend(&lun)?;
         let mut targets = self.write()?;
         let target = targets
             .get_mut(target_name)
@@ -196,6 +196,15 @@ fn target_status(target: &ManagedTarget) -> Result<TargetStatus, ManagementError
         name: target.config.name().clone(),
         authentication: target.config.authentication().policy(),
         luns: target.scsi.lun_info()?,
+    })
+}
+
+/// backend를 열고, 실패하면 어느 LUN의 어떤 backend였는지를 오류에 붙인다.
+fn open_backend(lun: &LunConfig) -> Result<Box<dyn StorageBackend>, ManagementError> {
+    build_backend(lun.backend()).map_err(|source| ManagementError::LunBackend {
+        lun: lun.lun(),
+        backend: lun.backend().to_string(),
+        source: Box::new(source),
     })
 }
 
@@ -305,6 +314,12 @@ pub enum ManagementError {
     TargetNotFound(IscsiName),
     #[error("LUN {0} already exists")]
     DuplicateLun(u64),
+    #[error("could not open LUN {lun} ({backend}): {source}")]
+    LunBackend {
+        lun: u64,
+        backend: String,
+        source: Box<ManagementError>,
+    },
     #[error("Windows storage backend is unavailable on this platform")]
     WindowsBackendUnavailable,
     #[error(transparent)]
@@ -615,5 +630,43 @@ mod tests {
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("management-test-secret"));
         api.create_connection(&name, 0x1234, 4).unwrap();
+    }
+
+    #[test]
+    fn backend_open_failure_names_the_lun_and_backend() {
+        let path = std::env::temp_dir().join(format!(
+            "iscsi-target-missing-image-{}.img",
+            std::process::id()
+        ));
+        let name = IscsiName::parse("iqn.2026-07.example.com:missing-image").unwrap();
+        let mut target = TargetConfig::new(name);
+        target
+            .add_lun(
+                LunConfig::new(
+                    5,
+                    LunBackendConfig::File {
+                        path: path.clone(),
+                        block_size: 512,
+                        read_only: true,
+                        durable_flush: false,
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        let api = TargetServiceApi::new();
+        let error = api.add_target(target).unwrap_err();
+        let ManagementError::LunBackend { lun, backend, .. } = &error else {
+            panic!("expected LunBackend, got {error:?}");
+        };
+        assert_eq!(*lun, 5);
+        assert_eq!(*backend, format!("file {}", path.display()));
+        assert!(error.to_string().starts_with(&format!(
+            "could not open LUN 5 (file {}): storage open failed: ",
+            path.display()
+        )));
+        // 실패한 Target은 등록되지 않는다.
+        assert!(api.targets().unwrap().is_empty());
     }
 }

@@ -491,6 +491,30 @@ fn sanitized_toml_error(input: &str, error: toml::de::Error) -> ConfigFileError 
     ConfigFileError::Toml {
         line: line + 1,
         column: column + 1,
+        reason: safe_toml_reason(error.message()),
+    }
+}
+
+/// parser의 오류 문구 중 파일의 값을 싣지 않는 종류만 그대로 전한다.
+///
+/// type이 맞지 않을 때의 문구는 문제가 된 값을 그대로 인용하므로, 잘못된 자리에 적힌
+/// secret이 로그로 나갈 수 있다. key 이름과 backend/method 이름만 나오는 종류만 통과시키고
+/// 나머지는 위치만 알린다.
+fn safe_toml_reason(message: &str) -> String {
+    const SAFE_PREFIXES: [&str; 4] = [
+        "unknown field",
+        "missing field",
+        "unknown variant",
+        "duplicate key",
+    ];
+    if SAFE_PREFIXES
+        .iter()
+        .any(|prefix| message.starts_with(prefix))
+    {
+        // 문구가 여러 줄이면 첫 줄만 쓴다.
+        message.lines().next().unwrap_or_default().to_owned()
+    } else {
+        "invalid TOML syntax or value".to_owned()
     }
 }
 
@@ -637,8 +661,13 @@ pub enum ConfigFileError {
     },
     #[error("configuration file {path:?} is not valid UTF-8")]
     InvalidUtf8 { path: PathBuf },
-    #[error("configuration TOML or schema error at line {line}, column {column}")]
-    Toml { line: usize, column: usize },
+    #[error("configuration error at line {line}, column {column}: {reason}")]
+    Toml {
+        line: usize,
+        column: usize,
+        /// 파일의 값을 싣지 않는 설명. key 이름과 backend/method 이름만 나올 수 있다.
+        reason: String,
+    },
     #[error("configuration serialization failed: {0}")]
     Serialize(String),
     #[error("configuration version {0} is unsupported")]
@@ -976,5 +1005,70 @@ virtual-disk-identity = true
                 },
             ]
         );
+    }
+
+    fn load_error(label: &str, input: &str) -> ConfigFileError {
+        let directory = TestDirectory::new(label);
+        let config_path = directory.path("target.toml");
+        fs::write(&config_path, input).unwrap();
+        ServerConfig::load_from_file(config_path).unwrap_err()
+    }
+
+    #[test]
+    fn lun_keys_outside_a_lun_table_are_reported_by_name_and_line() {
+        // `[[targets.luns]]` 줄을 빠뜨리면 LUN의 key가 Target의 key로 읽힌다.
+        let input = r#"version = 1
+
+[[targets]]
+name = "iqn.2026-07.example.com:disk"
+
+# [[targets.luns]]
+lun = 0
+backend = "windows-physical-drive"
+device-number = 2
+"#;
+        let error = load_error("lun-keys-in-target", input);
+        assert_eq!(
+            error.to_string(),
+            "configuration error at line 8, column 1: \
+             unknown field `backend`, expected one of `name`, `authentication`, `luns`"
+        );
+    }
+
+    #[test]
+    fn missing_field_and_unknown_backend_are_reported_by_name() {
+        let input = configuration("chap.secret").replace("block-size = 512\n", "");
+        let error = load_error("missing-field", &input);
+        assert!(matches!(
+            &error,
+            ConfigFileError::Toml { reason, .. } if reason == "missing field `block-size`"
+        ));
+
+        let input = configuration("chap.secret").replace("\"file\"", "\"flie\"");
+        let error = load_error("unknown-backend", &input);
+        let ConfigFileError::Toml { line, reason, .. } = &error else {
+            panic!("expected a TOML error, got {error:?}");
+        };
+        assert_eq!(*line, 19);
+        assert!(reason.starts_with("unknown variant `flie`, expected one of `memory`"));
+    }
+
+    #[test]
+    fn value_errors_report_only_the_position() {
+        // type이 틀린 값은 parser 문구에 그대로 인용되므로 문구를 전하지 않는다.
+        let input =
+            configuration("chap.secret").replace("port = 3260", "port = \"must-never-be-logged\"");
+        let error = load_error("value-type", &input);
+        assert_eq!(
+            error.to_string(),
+            "configuration error at line 7, column 8: invalid TOML syntax or value"
+        );
+        assert!(!format!("{error:?}").contains("must-never-be-logged"));
+
+        let error = load_error("syntax", "version = 1\n[listen\n");
+        assert!(matches!(
+            &error,
+            ConfigFileError::Toml { line: 2, reason, .. } if reason == "invalid TOML syntax or value"
+        ));
     }
 }
