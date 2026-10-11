@@ -183,26 +183,26 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 
 ### 구조
 
-- [x] GUI를 별도 패키지 `crates/iscsi-target-gui`로 분리. workspace는 라이브러리 `iscsi-target-server`, 명령줄 실행 파일 `iscsi-targetd`, GUI 실행 파일 `iscsi-target-gui` 셋이고, 두 실행 파일은 같은 라이브러리만 쓴다. GUI 패키지는 자리만 있고 화면과 기능은 아래 항목에서 구현한다
-- [ ] Windows 전용 binary 또는 module로 격리하고 `#[cfg(windows)]` 적용
-- [ ] `winsafe` 의존성을 `iscsi-target-gui` 패키지의 Windows target 전용 dependency로 추가
-- [ ] 먼저 `gui` feature만 사용하고 실제 control/API에 필요한 feature만 추가
-- [ ] GUI가 server/CLI와 동일한 관리 service API를 사용하도록 구성
-- [ ] WinSafe event loop와 Target async runtime을 분리
-- [ ] network/storage 작업은 GUI thread에서 실행하지 않고 channel로 명령과 event 전달
-- [ ] background event를 안전하게 UI thread로 전달하고 종료 순서를 명시
+- [x] GUI를 별도 패키지 `crates/iscsi-target-gui`로 분리. workspace는 라이브러리 `iscsi-target-server`, 명령줄 실행 파일 `iscsi-targetd`, GUI 실행 파일 `iscsi-target-gui` 셋이고, 두 실행 파일은 같은 라이브러리만 쓴다. 화면과 기능은 아래 항목에서 구현한다
+- [x] Windows 전용 module로 격리하고 `#[cfg(windows)]` 적용. WinSafe를 쓰는 코드는 `window` module뿐이고, 서버 제어(`controller`)와 로그 전달(`logging`)은 Win32에 의존하지 않는다
+- [x] `winsafe` 의존성을 `iscsi-target-gui` 패키지의 Windows target 전용 dependency로 추가 (0.0.29)
+- [x] 먼저 `gui` feature만 사용하고 실제 control/API에 필요한 feature만 추가. 설정 파일 선택 dialog(`IFileOpenDialog`) 때문에 `shell`을 더했다
+- [-] GUI가 server/CLI와 동일한 관리 service API를 사용하도록 구성. 시작/중지와 상태 조회는 `iscsi-targetd`와 같은 `Server`, `TargetServiceApi`를 쓴다. 실행 중 Target/LUN 변경은 아직 연결하지 않았다
+- [x] WinSafe event loop와 Target async runtime을 분리. 서버는 `Controller`가 만든 별도 thread의 Tokio runtime에서 돈다
+- [x] network/storage 작업은 GUI thread에서 실행하지 않고 channel로 명령과 event 전달
+- [x] background event를 안전하게 UI thread로 전달하고 종료 순서를 명시. worker는 UI thread를 부르지 않고, UI가 100ms timer로 event와 로그 channel을 비운다. 창은 서버가 내려간 뒤에 닫힌다. 종료 순서는 `controller.rs` 머리 주석에 있다
 - [ ] non-Windows 기본 빌드와 wire 계층에 Win32 의존성이 유입되지 않도록 검증
 
 ### 화면과 기능
 
-- [ ] 메인 창: 서버 실행/중지, listen 주소와 전체 상태
+- [x] 메인 창: 서버 실행/중지, listen 주소와 전체 상태. 설정 파일을 골라 시작하며, 실행 중인 Target과 LUN 목록(backend, 용량, block size, 접근 방식)을 읽기 전용으로 보여 준다
 - [ ] Target 목록: IQN, 활성 여부, 인증 정책 추가/수정/삭제
 - [ ] LUN 관리: backend 선택, LUN 번호, 용량, block size, read-only 설정
 - [ ] 이미지 파일 선택과 새 raw image 생성 dialog
 - [ ] active Session/Connection 목록과 상세 상태
 - [ ] 관리자가 선택한 Session/Connection 종료
 - [ ] discovery 설정과 CHAP credential 관리
-- [ ] 상태 bar, 오류 dialog와 최근 event/log 표시
+- [x] 상태 bar, 오류 dialog와 최근 event/log 표시. 로그는 최근 2000줄까지 남긴다
 - [ ] 설정 저장, 다시 읽기와 종료 전 변경 확인
 - [ ] DPI scaling, keyboard navigation, tab order와 긴 한글/영문 문자열 표시
 
