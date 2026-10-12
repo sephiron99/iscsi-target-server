@@ -1,15 +1,18 @@
 //! LUN 하나를 더하거나 고치는 modal dialog.
 //!
 //! 입력 칸의 값은 [`LunForm`]으로 모아 검증한다. 고른 backend가 쓰지 않는 칸은
-//! 비활성으로 둔다.
+//! 비활성으로 둔다. physical drive는 이 PC의 disk 목록에서 고른다.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use iscsi_target_server::LunConfig;
+use iscsi_target_server::platform::windows::physical_disks;
 use winsafe::{self as w, co, gui, prelude::*};
 
-use crate::settings::{BackendKind, LunForm};
+use crate::settings::{
+    BackendKind, DiskChoice, DiskEntry, LunForm, disk_choice_index, disk_choices,
+};
 use crate::{controls, file_dialog};
 
 /// dialog를 띄우고 닫힐 때까지 기다린다. OK로 닫으면 검증된 LUN을, 취소하면 `None`을
@@ -39,7 +42,12 @@ struct LunDialog {
     browse: gui::Button,
     block_size: gui::Edit,
     block_count: gui::Edit,
-    device_number: gui::Edit,
+    disk: gui::ComboBox,
+    refresh: gui::Button,
+    /// `disk` 목록의 각 줄이 가리키는 disk. 순서가 목록과 같다.
+    disks: Rc<RefCell<Vec<DiskChoice>>>,
+    /// dialog를 열 때 LUN에 적혀 있던 disk 번호. 목록을 다시 읽어도 남겨 둔다.
+    configured_disk: String,
     drive_letter: gui::Edit,
     read_only: gui::CheckBox,
     durable_flush: gui::CheckBox,
@@ -58,7 +66,7 @@ impl LunDialog {
     fn new(title: &str, form: &LunForm, accept: Accept) -> Self {
         let wnd = gui::WindowModal::new(gui::WindowModalOpts {
             title,
-            size: gui::dpi(440, 356),
+            size: gui::dpi(640, 356),
             ..Default::default()
         });
 
@@ -110,19 +118,19 @@ impl LunDialog {
             &wnd,
             gui::ComboBoxOpts {
                 position: gui::dpi(FIELD_X, row(1)),
-                width: gui::dpi_x(290),
+                width: gui::dpi_x(490),
                 items: &BackendKind::ALL.map(BackendKind::label),
                 selected_item: Some(form.kind.index()),
                 ..Default::default()
             },
         );
         label("Image file:", 2);
-        let path = edit(&form.path, 2, 204);
+        let path = edit(&form.path, 2, 404);
         let browse = gui::Button::new(
             &wnd,
             gui::ButtonOpts {
                 text: "&Browse...",
-                position: gui::dpi(FIELD_X + 210, row(2) - 1),
+                position: gui::dpi(FIELD_X + 410, row(2) - 1),
                 width: gui::dpi_x(80),
                 height: gui::dpi_y(25),
                 ..Default::default()
@@ -132,12 +140,35 @@ impl LunDialog {
         let block_size = edit(&form.block_size, 3, 90);
         label("Block count:", 4);
         let block_count = edit(&form.block_count, 4, 130);
-        label("Disk number:", 5);
-        let device_number = edit(&form.device_number, 5, 70);
+        label("Disk:", 5);
+        let disks = disk_choices(&scan_disks(), &form.device_number);
+        let disk = gui::ComboBox::new(
+            &wnd,
+            gui::ComboBoxOpts {
+                position: gui::dpi(FIELD_X, row(5)),
+                width: gui::dpi_x(404),
+                items: &disks
+                    .iter()
+                    .map(|choice| choice.label.as_str())
+                    .collect::<Vec<_>>(),
+                selected_item: disk_choice_index(&disks, &form.device_number),
+                ..Default::default()
+            },
+        );
+        let refresh = gui::Button::new(
+            &wnd,
+            gui::ButtonOpts {
+                text: "Re&fresh",
+                position: gui::dpi(FIELD_X + 410, row(5) - 1),
+                width: gui::dpi_x(80),
+                height: gui::dpi_y(25),
+                ..Default::default()
+            },
+        );
         label("Drive letter:", 6);
         let drive_letter = edit(&form.drive_letter, 6, 50);
         let read_only = check("&Read-only", 7, form.read_only);
-        let durable_flush = check("&Flush writes to the disk (durable)", 8, form.durable_flush);
+        let durable_flush = check("Flush &writes to the disk (durable)", 8, form.durable_flush);
         let virtual_disk_identity = check(
             "&Virtual disk identity (same-PC Initiator)",
             9,
@@ -148,7 +179,7 @@ impl LunDialog {
             &wnd,
             gui::ButtonOpts {
                 text: "OK",
-                position: gui::dpi(254, 318),
+                position: gui::dpi(454, 318),
                 width: gui::dpi_x(82),
                 height: gui::dpi_y(26),
                 control_style: co::BS::DEFPUSHBUTTON,
@@ -160,7 +191,7 @@ impl LunDialog {
             &wnd,
             gui::ButtonOpts {
                 text: "Cancel",
-                position: gui::dpi(344, 318),
+                position: gui::dpi(544, 318),
                 width: gui::dpi_x(82),
                 height: gui::dpi_y(26),
                 ctrl_id: co::DLGID::CANCEL.raw(),
@@ -176,7 +207,10 @@ impl LunDialog {
             browse,
             block_size,
             block_count,
-            device_number,
+            disk,
+            refresh,
+            disks: Rc::new(RefCell::new(disks)),
+            configured_disk: form.device_number.clone(),
             drive_letter,
             read_only,
             durable_flush,
@@ -218,6 +252,29 @@ impl LunDialog {
                 if let Some(chosen) = chosen {
                     this.path.set_text(&chosen)?;
                 }
+                Ok(())
+            }
+        });
+
+        // USB disk를 꽂은 뒤 dialog를 닫지 않고 목록을 다시 읽는다.
+        self.refresh.on().bn_clicked({
+            let this = self.clone();
+            move || {
+                let selected = this
+                    .selected_disk()
+                    .unwrap_or_else(|| this.configured_disk.clone());
+                let disks = disk_choices(&scan_disks(), &this.configured_disk);
+                this.disk.items().delete_all();
+                this.disk.items().add(
+                    &disks
+                        .iter()
+                        .map(|choice| choice.label.as_str())
+                        .collect::<Vec<_>>(),
+                )?;
+                this.disk
+                    .items()
+                    .select(disk_choice_index(&disks, &selected));
+                *this.disks.borrow_mut() = disks;
                 Ok(())
             }
         });
@@ -272,9 +329,8 @@ impl LunDialog {
         self.block_count
             .hwnd()
             .EnableWindow(kind.uses_block_count());
-        self.device_number
-            .hwnd()
-            .EnableWindow(kind.uses_device_number());
+        self.disk.hwnd().EnableWindow(kind.uses_device_number());
+        self.refresh.hwnd().EnableWindow(kind.uses_device_number());
         self.drive_letter
             .hwnd()
             .EnableWindow(kind.uses_drive_letter());
@@ -286,6 +342,15 @@ impl LunDialog {
             .EnableWindow(kind.uses_virtual_disk_identity());
     }
 
+    /// 목록에서 고른 disk의 번호. 고른 것이 없으면 `None`이다.
+    fn selected_disk(&self) -> Option<String> {
+        let index = self.disk.items().selected_index()?;
+        self.disks
+            .borrow()
+            .get(index as usize)
+            .map(|choice| choice.device_number.to_string())
+    }
+
     fn form(&self) -> w::AnyResult<LunForm> {
         Ok(LunForm {
             lun: controls::text(&self.lun)?,
@@ -293,11 +358,26 @@ impl LunDialog {
             path: controls::text(&self.path)?,
             block_size: controls::text(&self.block_size)?,
             block_count: controls::text(&self.block_count)?,
-            device_number: controls::text(&self.device_number)?,
+            device_number: self.selected_disk().unwrap_or_default(),
             drive_letter: controls::text(&self.drive_letter)?,
             read_only: self.read_only.is_checked(),
             durable_flush: self.durable_flush.is_checked(),
             virtual_disk_identity: self.virtual_disk_identity.is_checked(),
         })
     }
+}
+
+/// 이 PC의 physical disk를 읽는다. 장치 정보만 묻는 것이라 빨리 끝나고 관리자 권한이
+/// 필요 없다.
+fn scan_disks() -> Vec<DiskEntry> {
+    physical_disks()
+        .into_iter()
+        .map(|disk| DiskEntry {
+            device_number: disk.device_number,
+            description: disk.description(),
+            bus: disk.bus_type.to_string(),
+            removable: disk.removable,
+            size_bytes: disk.size_bytes,
+        })
+        .collect()
 }

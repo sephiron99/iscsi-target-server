@@ -313,7 +313,11 @@ impl LunForm {
                 }
             }
             BackendKind::PhysicalDrive => LunBackendConfig::WindowsPhysicalDrive {
-                device_number: parse_number(&self.device_number, "The device number")?,
+                device_number: if self.device_number.trim().is_empty() {
+                    return Err("Choose the disk.".into());
+                } else {
+                    parse_number(&self.device_number, "The disk number")?
+                },
                 read_only: self.read_only,
                 virtual_disk_identity: self.virtual_disk_identity,
             },
@@ -341,6 +345,101 @@ impl LunForm {
                 message
             }
         })
+    }
+}
+
+/// 이 PC에 있는 physical disk 하나. LUN dialog의 목록을 만드는 데 쓴다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiskEntry {
+    pub device_number: u32,
+    /// 제조사와 제품 이름. 장치가 알려 주지 않았으면 비어 있다.
+    pub description: String,
+    pub bus: String,
+    pub removable: bool,
+    pub size_bytes: Option<u64>,
+}
+
+/// LUN dialog의 disk 목록 한 줄.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiskChoice {
+    pub device_number: u32,
+    pub label: String,
+}
+
+/// disk 목록을 번호 순서로 만든다.
+///
+/// `configured`는 고치고 있는 LUN에 적혀 있던 disk 번호다. 그 disk가 지금 연결되어
+/// 있지 않아도 목록에 넣어, dialog를 열었다 닫는 것만으로 설정이 바뀌지 않게 한다.
+pub fn disk_choices(disks: &[DiskEntry], configured: &str) -> Vec<DiskChoice> {
+    let mut choices: Vec<DiskChoice> = disks
+        .iter()
+        .map(|disk| DiskChoice {
+            device_number: disk.device_number,
+            label: disk_label(disk),
+        })
+        .collect();
+    if let Ok(configured) = configured.trim().parse::<u32>()
+        && choices
+            .iter()
+            .all(|choice| choice.device_number != configured)
+    {
+        choices.push(DiskChoice {
+            device_number: configured,
+            label: format!("Disk {configured} - not connected"),
+        });
+    }
+    choices.sort_by_key(|choice| choice.device_number);
+    choices
+}
+
+/// `configured`에 적힌 번호가 목록의 몇 번째인지.
+pub fn disk_choice_index(choices: &[DiskChoice], configured: &str) -> Option<u32> {
+    let configured: u32 = configured.trim().parse().ok()?;
+    choices
+        .iter()
+        .position(|choice| choice.device_number == configured)
+        .map(|index| index as u32)
+}
+
+/// 예: `Disk 1 - USB SanDisk 3.2Gen1 (USB, removable, 57.3 GiB)`.
+fn disk_label(disk: &DiskEntry) -> String {
+    let description = if disk.description.is_empty() {
+        "Unknown disk"
+    } else {
+        &disk.description
+    };
+    let mut details = vec![disk.bus.clone()];
+    if disk.removable {
+        details.push("removable".to_owned());
+    }
+    if let Some(size) = disk.size_bytes {
+        details.push(format_capacity(size));
+    }
+    format!(
+        "Disk {} - {description} ({})",
+        disk.device_number,
+        details.join(", ")
+    )
+}
+
+/// byte 수를 1024 단위로 읽기 쉽게 적는다. 예: `1.5 GiB`.
+pub fn format_capacity(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["KiB", "MiB", "GiB", "TiB", "PiB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    // 소수점 아래 한 자리로 반올림하되 `.0`은 떼어 낸다.
+    let rounded = (value * 10.0).round() / 10.0;
+    if rounded.fract() == 0.0 {
+        format!("{rounded:.0} {}", UNITS[unit])
+    } else {
+        format!("{rounded:.1} {}", UNITS[unit])
     }
 }
 
@@ -532,7 +631,7 @@ mod tests {
 
     #[test]
     fn invalid_form_input_is_rejected_with_a_message_for_the_field() {
-        let cases: [Case<LunForm>; 9] = [
+        let cases: [Case<LunForm>; 10] = [
             (|f| f.lun = "".into(), "The LUN number is required."),
             (
                 |f| f.lun = "-1".into(),
@@ -557,9 +656,16 @@ mod tests {
             (
                 |f| {
                     f.kind = BackendKind::PhysicalDrive;
+                    f.device_number = " ".into();
+                },
+                "Choose the disk.",
+            ),
+            (
+                |f| {
+                    f.kind = BackendKind::PhysicalDrive;
                     f.device_number = "4294967296".into();
                 },
-                "The device number must be a whole number in range.",
+                "The disk number must be a whole number in range.",
             ),
             (
                 |f| {
@@ -582,5 +688,78 @@ mod tests {
             change(&mut form);
             assert_eq!(form.to_config().unwrap_err(), expected);
         }
+    }
+
+    #[test]
+    fn capacity_is_formatted_in_binary_units() {
+        assert_eq!(format_capacity(0), "0 B");
+        assert_eq!(format_capacity(1023), "1023 B");
+        assert_eq!(format_capacity(1024), "1 KiB");
+        assert_eq!(format_capacity(32 * 1024), "32 KiB");
+        assert_eq!(format_capacity(1536 * 1024 * 1024), "1.5 GiB");
+        assert_eq!(format_capacity(640 * 1024 * 1024), "640 MiB");
+        assert_eq!(format_capacity(u64::MAX), "16384 PiB");
+    }
+
+    fn usb_disk() -> DiskEntry {
+        DiskEntry {
+            device_number: 1,
+            description: "USB SanDisk 3.2Gen1".to_owned(),
+            bus: "USB".to_owned(),
+            removable: true,
+            size_bytes: Some(61_530_439_680),
+        }
+    }
+
+    #[test]
+    fn disk_choices_describe_each_disk_in_number_order() {
+        let system = DiskEntry {
+            device_number: 0,
+            description: String::new(),
+            bus: "NVMe".to_owned(),
+            removable: false,
+            size_bytes: None,
+        };
+        let choices = disk_choices(&[usb_disk(), system], "");
+        assert_eq!(
+            choices,
+            [
+                DiskChoice {
+                    device_number: 0,
+                    label: "Disk 0 - Unknown disk (NVMe)".to_owned(),
+                },
+                DiskChoice {
+                    device_number: 1,
+                    label: "Disk 1 - USB SanDisk 3.2Gen1 (USB, removable, 57.3 GiB)".to_owned(),
+                },
+            ]
+        );
+        // 새 LUN에는 고른 disk가 없다.
+        assert_eq!(disk_choice_index(&choices, ""), None);
+        assert_eq!(disk_choice_index(&choices, " 1 "), Some(1));
+    }
+
+    #[test]
+    fn configured_disk_that_is_not_connected_stays_in_the_list() {
+        let choices = disk_choices(&[usb_disk()], "0");
+        assert_eq!(
+            choices,
+            [
+                DiskChoice {
+                    device_number: 0,
+                    label: "Disk 0 - not connected".to_owned(),
+                },
+                DiskChoice {
+                    device_number: 1,
+                    label: "Disk 1 - USB SanDisk 3.2Gen1 (USB, removable, 57.3 GiB)".to_owned(),
+                },
+            ]
+        );
+        assert_eq!(disk_choice_index(&choices, "0"), Some(0));
+
+        // 연결되어 있으면 한 번만 나오고, 숫자가 아닌 값은 무시한다.
+        assert_eq!(disk_choices(&[usb_disk()], "1").len(), 1);
+        assert_eq!(disk_choices(&[usb_disk()], "x").len(), 1);
+        assert_eq!(disk_choice_index(&choices, "x"), None);
     }
 }

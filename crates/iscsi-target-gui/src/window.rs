@@ -17,7 +17,7 @@ use winsafe::{self as w, co, gui, prelude::*};
 
 use crate::controller::{Controller, Event, LunView, ServerState, TargetView, describe_backend};
 use crate::logging::{self, LogBuffer, LogReceiver, LogUpdate};
-use crate::settings::{LunForm, Settings};
+use crate::settings::{LunForm, Settings, format_capacity};
 use crate::{controls, file_dialog, lun_dialog};
 
 const APP_TITLE: &str = "iSCSI Target Server";
@@ -866,41 +866,9 @@ fn lun_columns(lun: &LunConfig, opened: Option<&LunView>) -> [String; 5] {
     ]
 }
 
-/// byte 수를 1024 단위로 읽기 쉽게 적는다. 예: `1.5 GiB`.
-fn format_capacity(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["KiB", "MiB", "GiB", "TiB", "PiB"];
-    if bytes < 1024 {
-        return format!("{bytes} B");
-    }
-    let mut value = bytes as f64 / 1024.0;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    // 소수점 아래 한 자리로 반올림하되 `.0`은 떼어 낸다.
-    let rounded = (value * 10.0).round() / 10.0;
-    if rounded.fract() == 0.0 {
-        format!("{rounded:.0} {}", UNITS[unit])
-    } else {
-        format!("{rounded:.1} {}", UNITS[unit])
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn capacity_is_formatted_in_binary_units() {
-        assert_eq!(format_capacity(0), "0 B");
-        assert_eq!(format_capacity(1023), "1023 B");
-        assert_eq!(format_capacity(1024), "1 KiB");
-        assert_eq!(format_capacity(32 * 1024), "32 KiB");
-        assert_eq!(format_capacity(1536 * 1024 * 1024), "1.5 GiB");
-        assert_eq!(format_capacity(640 * 1024 * 1024), "640 MiB");
-        assert_eq!(format_capacity(u64::MAX), "16384 PiB");
-    }
 
     #[test]
     fn lun_row_shows_configured_values_until_the_server_opens_the_backend() {

@@ -151,7 +151,7 @@
 - [-] removable/USB physical disk 지원: sector size 조회의 `IOCTL_DISK_GET_DRIVE_GEOMETRY` fallback과 disk 전체 read-write serve 시 mounted volume 일괄 lock/dismount, 실기기 검증 대기
 - [-] physical disk serve 전 경고 후 offline 전환과 종료 시 online 복원 (`IOCTL_DISK_SET_DISK_ATTRIBUTES`, 재부팅 후 비유지). 전환을 지원하지 않는 disk는 경고 후 기존 volume lock 방식으로 fallback, 실기기 검증 대기
 - [-] 같은 PC의 Initiator를 위한 disk 식별자 가상화 (`virtual-disk-identity`): MBR signature, GPT disk GUID와 partition GUID를 Initiator에게만 다른 값으로 제시하고 원본 disk의 값은 보존. Windows의 "Redundant Path"/"Collision" offline 판정 회피가 목적. 같은 PC의 Windows Initiator에서 read-write LUN이 Online으로 올라와 volume이 mount되는 것은 실기기 확인, 파일 write와 partition 변경(GPT write 경로)은 실기기 검증 대기
-- [x] physical disk 열거 API (device number, description, serial number, bus type, removable 여부, 용량) — GUI/CLI 디스크 선택용. `platform::windows::physical_disks()`가 disk 번호 0~127을 접근 권한 0으로 열어 `IOCTL_STORAGE_QUERY_PROPERTY`로 묻는다. 관리자 권한이 필요 없고 disk 내용에 손대지 않는다. GUI의 LUN dialog와 CLI에서 쓰는 것은 아직 연결하지 않았다
+- [x] physical disk 열거 API (device number, description, serial number, bus type, removable 여부, 용량) — GUI/CLI 디스크 선택용. `platform::windows::physical_disks()`가 disk 번호 0~127을 접근 권한 0으로 열어 `IOCTL_STORAGE_QUERY_PROPERTY`로 묻는다. 관리자 권한이 필요 없고 disk 내용에 손대지 않는다. GUI의 LUN dialog와 기동 로그가 쓴다. CLI에서 목록을 보여 주는 것은 아직 없다
 
 완료 조건:
 
@@ -197,7 +197,7 @@ GUI는 [WinSafe](https://github.com/rodrigocfd/winsafe)의 native Win32 고수�
 
 - [x] 메인 창: 서버 실행/중지, listen 주소와 전체 상태. 창이 들고 있는 설정으로 시작하며, 서버가 도는 동안은 설정을 고칠 수 없다
 - [-] Target 설정: 서버가 단일 Target만 허용하므로 목록이 아니라 Target 하나의 IQN과 listen 주소/port를 입력 칸으로 고친다. 인증 정책은 읽어 온 값을 보여 주기만 하고 편집은 아래 CHAP 항목에서 한다
-- [x] LUN 관리: backend 선택(image file, physical drive, volume, memory), LUN 번호, block size/count, read-only, durable flush, virtual disk identity. 추가/수정/삭제는 `lun_dialog`의 modal dialog로 하고 입력 검증은 `settings`에 있다. 용량은 memory가 아니면 서버가 backend를 연 뒤에 표시한다. physical drive는 disk 번호를 직접 입력한다(열거 API가 생기면 목록에서 고르게 바꾼다)
+- [x] LUN 관리: backend 선택(image file, physical drive, volume, memory), LUN 번호, block size/count, read-only, durable flush, virtual disk identity. 추가/수정/삭제는 `lun_dialog`의 modal dialog로 하고 입력 검증은 `settings`에 있다. 용량은 memory가 아니면 서버가 backend를 연 뒤에 표시한다. physical drive는 이 PC의 disk 목록(번호, 모델명, bus, removable, 용량)에서 고르고 Refresh로 다시 읽는다. 설정에 적힌 disk가 지금 연결되어 있지 않아도 목록에 남긴다
 - [-] 이미지 파일 선택과 새 raw image 생성 dialog. 이미 있는 파일 선택은 된다. 새 image 생성은 아직 없다
 - [ ] active Session/Connection 목록과 상세 상태
 - [ ] 관리자가 선택한 Session/Connection 종료
