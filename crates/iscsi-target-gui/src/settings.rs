@@ -46,6 +46,16 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// 새로 만드는 설정. Target 이름을 이 PC의 이름과 지금 날짜로 미리 채운다.
+    ///
+    /// `unix_seconds`는 1970-01-01 00:00 UTC부터의 초다.
+    pub fn new_for(computer_name: &str, unix_seconds: u64) -> Self {
+        Self {
+            target_name: default_target_name(computer_name, unix_seconds),
+            ..Self::default()
+        }
+    }
+
     /// 읽어 온 설정을 창에서 고칠 수 있는 모양으로 바꾼다.
     pub fn from_config(config: &ServerConfig) -> Result<Self, String> {
         let [target] = config.targets() else {
@@ -153,6 +163,59 @@ impl Settings {
             }
         }
     }
+}
+
+/// 새 설정에 미리 채울 Target 이름. 예: `iqn.2026-10.local.my-pc:disk`.
+///
+/// IQN은 `iqn.<연도>-<월>.<거꾸로 쓴 domain>:<이름>` 모양이다(RFC 7143 4.2.7.1). 날짜는
+/// 원래 그 domain을 가진 시점이지만, 등록된 domain이 없는 PC에서는 만든 달을 쓰고
+/// domain 자리에 `local.<PC 이름>`을 둔다. 같은 network의 다른 PC와 겹치지 않으면 된다.
+pub fn default_target_name(computer_name: &str, unix_seconds: u64) -> String {
+    let (year, month) = year_and_month(unix_seconds);
+    format!(
+        "iqn.{year:04}-{month:02}.local.{}:disk",
+        iqn_label(computer_name)
+    )
+}
+
+/// PC 이름을 IQN에 쓸 수 있는 글자로 바꾼다. 소문자, 숫자와 `-`만 남긴다.
+fn iqn_label(computer_name: &str) -> String {
+    /// DNS label 하나의 최대 길이.
+    const MAX_LENGTH: usize = 63;
+    let label: String = computer_name
+        .chars()
+        .map(|character| match character.to_ascii_lowercase() {
+            lower @ ('a'..='z' | '0'..='9') => lower,
+            _ => '-',
+        })
+        .take(MAX_LENGTH)
+        .collect();
+    let label = label.trim_matches('-');
+    if label.is_empty() {
+        "iscsi-target".to_owned()
+    } else {
+        label.to_owned()
+    }
+}
+
+/// UTC 기준 연도와 월. 날짜 계산은 Howard Hinnant의 `civil_from_days` 방식이다.
+fn year_and_month(unix_seconds: u64) -> (u64, u64) {
+    // 0000-03-01을 기준으로 삼으면 윤일이 한 해의 끝에 온다.
+    let days = unix_seconds / 86_400 + 719_468;
+    let era = days / 146_097;
+    let day_of_era = days % 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    // 3월을 0으로 세는 달.
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = year_of_era + era * 400 + u64::from(month <= 2);
+    (year, month)
 }
 
 /// LUN dialog에서 고르는 backend 종류.
@@ -761,5 +824,54 @@ mod tests {
         assert_eq!(disk_choices(&[usb_disk()], "1").len(), 1);
         assert_eq!(disk_choices(&[usb_disk()], "x").len(), 1);
         assert_eq!(disk_choice_index(&choices, "x"), None);
+    }
+
+    #[test]
+    fn new_settings_get_a_valid_target_name_from_the_pc_and_the_date() {
+        // 2026-10-12 07:11:38 UTC
+        let settings = Settings::new_for("DESKTOP-AB12CD", 1_791_789_098);
+        assert_eq!(
+            settings.target_name,
+            "iqn.2026-10.local.desktop-ab12cd:disk"
+        );
+        IscsiName::parse(&settings.target_name).unwrap();
+        // 이름 말고는 빈 설정과 같다.
+        assert_eq!(
+            Settings {
+                target_name: String::new(),
+                ..settings
+            },
+            Settings::default()
+        );
+    }
+
+    #[test]
+    fn target_name_uses_only_characters_an_iqn_allows() {
+        let name = |computer_name: &str| default_target_name(computer_name, 0);
+        assert_eq!(name("My_PC 01"), "iqn.1970-01.local.my-pc-01:disk");
+        assert_eq!(name("--서버--"), "iqn.1970-01.local.iscsi-target:disk");
+        assert_eq!(name(""), "iqn.1970-01.local.iscsi-target:disk");
+        let long = name(&"a".repeat(200));
+        assert_eq!(long.len(), "iqn.1970-01.local.:disk".len() + 63);
+        for computer_name in ["My_PC 01", "--서버--", "", "a.b:c", &"a".repeat(200)] {
+            IscsiName::parse(&name(computer_name)).unwrap();
+        }
+    }
+
+    #[test]
+    fn year_and_month_follow_the_calendar_across_leap_years() {
+        const DAY: u64 = 86_400;
+        assert_eq!(year_and_month(0), (1970, 1));
+        assert_eq!(year_and_month(31 * DAY - 1), (1970, 1));
+        assert_eq!(year_and_month(31 * DAY), (1970, 2));
+        // 2000-02-29와 그 다음 날
+        assert_eq!(year_and_month(951_782_400), (2000, 2));
+        assert_eq!(year_and_month(951_868_800), (2000, 3));
+        // 2023-12-31 23:59:59와 2024-01-01 00:00:00
+        assert_eq!(year_and_month(1_704_067_199), (2023, 12));
+        assert_eq!(year_and_month(1_704_067_200), (2024, 1));
+        // 2100년은 윤년이 아니다: 2100-02-28 다음 날은 3월 1일
+        assert_eq!(year_and_month(4_107_456_000), (2100, 2));
+        assert_eq!(year_and_month(4_107_542_400), (2100, 3));
     }
 }

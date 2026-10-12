@@ -221,6 +221,7 @@ impl MainWindow {
             guard_escape(edit);
         }
 
+        let new_settings = new_settings();
         let new_self = Self {
             wnd,
             new,
@@ -245,8 +246,8 @@ impl MainWindow {
                 state: Cell::new(ServerState::default()),
                 closing: Cell::new(false),
                 log_buffer: RefCell::new(LogBuffer::new(LOG_LINE_LIMIT)),
-                settings: RefCell::new(Settings::default()),
-                saved: RefCell::new(Settings::default()),
+                settings: RefCell::new(new_settings.clone()),
+                saved: RefCell::new(new_settings),
                 path: RefCell::new(None),
                 running_luns: RefCell::new(Vec::new()),
                 pending_open: RefCell::new(initial_config_path),
@@ -283,7 +284,7 @@ impl MainWindow {
             let this = self.clone();
             move || {
                 if this.confirm_discard()? {
-                    this.replace_settings(Settings::default(), None)?;
+                    this.replace_settings(new_settings(), None)?;
                 }
                 Ok(())
             }
@@ -806,6 +807,16 @@ impl MainWindow {
         }
         Ok(())
     }
+}
+
+/// 새로 만드는 설정. Target 이름을 이 PC의 이름과 지금 날짜로 미리 채운다.
+fn new_settings() -> Settings {
+    let computer_name = std::env::var("COMPUTERNAME").unwrap_or_default();
+    let unix_seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default();
+    Settings::new_for(&computer_name, unix_seconds)
 }
 
 /// Edit에서 누른 ESC가 창을 닫지 않게 막는다.
