@@ -361,6 +361,17 @@ mod tests {
         config
     }
 
+    /// port를 여는 테스트를 한 번에 하나씩만 돌린다.
+    ///
+    /// `free_port`는 빈 port를 골라 닫은 뒤 번호만 돌려주므로, 서버가 그 port를 열기
+    /// 전에 나란히 도는 다른 테스트가 같은 port를 가져갈 수 있다.
+    fn exclusive_ports() -> std::sync::MutexGuard<'static, ()> {
+        static PORTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        PORTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn free_port() -> u16 {
         std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
@@ -382,6 +393,7 @@ mod tests {
 
     #[test]
     fn start_reports_the_listening_target_and_stop_reports_the_summary() {
+        let _ports = exclusive_ports();
         let port = free_port();
         let controller = Controller::spawn().unwrap();
 
@@ -420,6 +432,7 @@ mod tests {
 
     #[test]
     fn invalid_configuration_fails_the_start_and_leaves_the_controller_usable() {
+        let _ports = exclusive_ports();
         let controller = Controller::spawn().unwrap();
 
         // Target이 없는 설정은 listen하기 전에 거절된다.
@@ -437,6 +450,7 @@ mod tests {
 
     #[test]
     fn port_already_in_use_fails_the_start() {
+        let _ports = exclusive_ports();
         let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let controller = Controller::spawn().unwrap();
 
@@ -447,6 +461,7 @@ mod tests {
 
     #[test]
     fn start_while_running_and_stop_while_stopped_are_ignored() {
+        let _ports = exclusive_ports();
         let server_config = config(free_port());
         let controller = Controller::spawn().unwrap();
 
@@ -466,6 +481,7 @@ mod tests {
 
     #[test]
     fn shutdown_stops_a_running_server_and_releases_the_port() {
+        let _ports = exclusive_ports();
         let port = free_port();
         let controller = Controller::spawn().unwrap();
 
