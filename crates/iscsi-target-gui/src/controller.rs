@@ -264,7 +264,6 @@ async fn start(config: &ServerConfig) -> Result<(Running, SocketAddr, Vec<Target
         // sender가 버려져도 종료 요청으로 본다.
         let _ = stop_receiver.await;
     }));
-    tracing::info!(%address, "Target service started");
     Ok((
         Running {
             stop: Some(stop_sender),

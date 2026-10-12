@@ -67,6 +67,15 @@ impl Server {
             factory,
         )
         .await?;
+        match service.local_addr() {
+            Ok(address) => tracing::info!(
+                %address,
+                max_connections = config.max_connections(),
+                max_blocking_storage_operations = config.max_blocking_storage_operations(),
+                "Target service listening"
+            ),
+            Err(error) => tracing::warn!(%error, "could not read the listening address"),
+        }
         Ok(Self { service, api })
     }
 

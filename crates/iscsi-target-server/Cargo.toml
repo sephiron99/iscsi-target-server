@@ -31,3 +31,8 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+# 기동 로그의 내용을 테스트에서 붙잡아 확인하는 데 쓴다.
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "fmt",
+    "std",
+] }

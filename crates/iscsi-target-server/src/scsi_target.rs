@@ -487,6 +487,10 @@ impl SharedScsiTarget {
         Ok(self.lock()?.lun_info())
     }
 
+    pub fn lun_serial_number(&self, lun: u64) -> Result<String, SharedScsiTargetError> {
+        Ok(self.lock()?.lun_serial_number(lun))
+    }
+
     pub fn max_transfer_length(&self) -> Result<usize, SharedScsiTargetError> {
         Ok(self.lock()?.max_transfer_length())
     }
@@ -599,6 +603,17 @@ impl ScsiTarget {
 
     pub fn max_transfer_length(&self) -> usize {
         self.max_transfer_length
+    }
+
+    /// INQUIRY VPD 0x80으로 Initiator에게 보이는 product serial number.
+    ///
+    /// Target 이름과 LUN 번호에서 정해지므로 LUN이 아직 없어도 값이 있다.
+    pub fn lun_serial_number(&self, lun: u64) -> String {
+        DeviceIdentity::new(&self.identity_namespace, lun)
+            .serial_number()
+            .iter()
+            .map(|digit| char::from(*digit))
+            .collect()
     }
 
     pub fn lun_info(&self) -> Vec<LunInfo> {

@@ -52,10 +52,22 @@ impl TargetServiceApi {
         let mut target = ScsiTarget::default();
         // 장치 식별자가 Target마다 달라지도록 iSCSI name을 namespace로 쓴다.
         target.set_identity_namespace(config.name().as_str());
+        let mut opened = Vec::with_capacity(config.luns().len());
         for lun in config.luns() {
+            let (backend, facts) = open_backend(lun)?;
             target
-                .add_boxed_lun(lun.lun(), open_backend(lun)?)
+                .add_boxed_lun(lun.lun(), backend)
                 .map_err(SharedScsiTargetError::from)?;
+            opened.push((lun, facts));
+        }
+        // 모든 backend가 열린 뒤에 한꺼번에 남긴다. 중간에 실패한 기동이 일부 LUN만
+        // 준비된 것처럼 보이지 않게 한다.
+        log_target_ready(&config);
+        let info = target.lun_info();
+        for (lun, facts) in &opened {
+            if let Some(info) = info.iter().find(|info| info.lun == lun.lun()) {
+                log_lun_ready(lun, info, &target.lun_serial_number(lun.lun()), facts);
+            }
         }
         let managed = ManagedTarget {
             config,
@@ -92,7 +104,13 @@ impl TargetServiceApi {
             }
         }
 
-        let backend = open_backend(&lun)?;
+        let (backend, facts) = open_backend(&lun)?;
+        let info = LunInfo {
+            lun: lun.lun(),
+            block_size: backend.block_size(),
+            block_count: backend.block_count(),
+            read_only: backend.read_only(),
+        };
         let mut targets = self.write()?;
         let target = targets
             .get_mut(target_name)
@@ -110,6 +128,12 @@ impl TargetServiceApi {
             let _ = target.scsi.remove_lun(lun.lun());
             return Err(error.into());
         }
+        log_lun_ready(
+            &lun,
+            &info,
+            &target.scsi.lun_serial_number(lun.lun())?,
+            &facts,
+        );
         Ok(())
     }
 
@@ -199,8 +223,29 @@ fn target_status(target: &ManagedTarget) -> Result<TargetStatus, ManagementError
     })
 }
 
+/// backend를 여는 동안에만 알 수 있는 사실. 기동 로그에 쓴다.
+#[derive(Debug, Default)]
+struct BackendFacts {
+    /// physical disk의 장치 정보. 물을 수 없었으면 `None`이다.
+    disk: Option<DiskFacts>,
+    /// 식별자 가상화가 실제로 바꿔 보여 주는 값이 있는지. 가상화를 켰을 때만 있다.
+    virtual_identity_active: Option<bool>,
+    /// physical disk를 host로부터 보호하는 방식.
+    disk_protection: Option<String>,
+}
+
+#[derive(Debug)]
+struct DiskFacts {
+    model: String,
+    bus: String,
+    removable: bool,
+    serial_number: String,
+}
+
 /// backend를 열고, 실패하면 어느 LUN의 어떤 backend였는지를 오류에 붙인다.
-fn open_backend(lun: &LunConfig) -> Result<Box<dyn StorageBackend>, ManagementError> {
+fn open_backend(
+    lun: &LunConfig,
+) -> Result<(Box<dyn StorageBackend>, BackendFacts), ManagementError> {
     build_backend(lun.backend()).map_err(|source| ManagementError::LunBackend {
         lun: lun.lun(),
         backend: lun.backend().to_string(),
@@ -208,7 +253,109 @@ fn open_backend(lun: &LunConfig) -> Result<Box<dyn StorageBackend>, ManagementEr
     })
 }
 
-fn build_backend(config: &LunBackendConfig) -> Result<Box<dyn StorageBackend>, ManagementError> {
+/// 기동할 때 Target 하나의 요약을 남긴다. CHAP secret과 그 파일 경로는 남기지 않는다.
+fn log_target_ready(config: &TargetConfig) {
+    let name = config.name().as_str();
+    let luns = config.luns().len();
+    match config.authentication() {
+        AuthenticationConfig::None => {
+            tracing::info!(name, authentication = "none", luns, "Target ready");
+        }
+        AuthenticationConfig::Chap(chap) => tracing::info!(
+            name,
+            authentication = "chap",
+            chap_user = chap.username(),
+            luns,
+            "Target ready"
+        ),
+        AuthenticationConfig::PreferChap(chap) => tracing::info!(
+            name,
+            authentication = "prefer-chap",
+            chap_user = chap.username(),
+            luns,
+            "Target ready"
+        ),
+    }
+}
+
+/// 열린 LUN 하나를 남긴다. 크기는 설정이 아니라 연 backend가 알려 준 값이다.
+fn log_lun_ready(config: &LunConfig, info: &LunInfo, serial: &str, facts: &BackendFacts) {
+    let lun = info.lun;
+    let capacity_bytes = u64::from(info.block_size).saturating_mul(info.block_count);
+    let (block_size, block_count, read_only) = (info.block_size, info.block_count, info.read_only);
+    match config.backend() {
+        LunBackendConfig::Memory { .. } => tracing::info!(
+            lun,
+            backend = "memory",
+            capacity_bytes,
+            block_size,
+            block_count,
+            read_only,
+            serial,
+            "LUN ready"
+        ),
+        LunBackendConfig::File {
+            path,
+            durable_flush,
+            ..
+        } => tracing::info!(
+            lun,
+            backend = "file",
+            path = %path.display(),
+            capacity_bytes,
+            block_size,
+            block_count,
+            read_only,
+            durable_flush,
+            serial,
+            "LUN ready"
+        ),
+        LunBackendConfig::WindowsPhysicalDrive {
+            device_number,
+            virtual_disk_identity,
+            ..
+        } => {
+            let disk = facts.disk.as_ref();
+            tracing::info!(
+                lun,
+                backend = "physical drive",
+                device_number,
+                model = disk.map_or("unknown", |disk| disk.model.as_str()),
+                bus = disk.map_or("unknown", |disk| disk.bus.as_str()),
+                removable = disk.map_or("unknown", |disk| if disk.removable {
+                    "true"
+                } else {
+                    "false"
+                }),
+                hardware_serial = disk.map_or("unknown", |disk| disk.serial_number.as_str()),
+                capacity_bytes,
+                block_size,
+                block_count,
+                read_only,
+                virtual_disk_identity,
+                virtual_disk_identity_active = facts.virtual_identity_active.unwrap_or(false),
+                offline = facts.disk_protection.as_deref().unwrap_or("unknown"),
+                serial,
+                "LUN ready"
+            );
+        }
+        LunBackendConfig::WindowsVolume { drive_letter, .. } => tracing::info!(
+            lun,
+            backend = "volume",
+            drive_letter = %drive_letter.to_ascii_uppercase(),
+            capacity_bytes,
+            block_size,
+            block_count,
+            read_only,
+            serial,
+            "LUN ready"
+        ),
+    }
+}
+
+fn build_backend(
+    config: &LunBackendConfig,
+) -> Result<(Box<dyn StorageBackend>, BackendFacts), ManagementError> {
     match config {
         LunBackendConfig::Memory {
             block_size,
@@ -217,7 +364,7 @@ fn build_backend(config: &LunBackendConfig) -> Result<Box<dyn StorageBackend>, M
         } => {
             let mut backend = MemoryBackend::new(*block_size, *block_count)?;
             backend.set_read_only(*read_only);
-            Ok(Box::new(backend))
+            Ok((Box::new(backend), BackendFacts::default()))
         }
         LunBackendConfig::File {
             path,
@@ -231,7 +378,7 @@ fn build_backend(config: &LunBackendConfig) -> Result<Box<dyn StorageBackend>, M
                 FileBackend::open_read_write(path, *block_size)?
             };
             backend.set_durable_flush(*durable_flush);
-            Ok(Box::new(backend))
+            Ok((Box::new(backend), BackendFacts::default()))
         }
         LunBackendConfig::WindowsPhysicalDrive {
             device_number,
@@ -259,19 +406,32 @@ fn build_windows_physical_drive(
     device_number: u32,
     read_only: bool,
     virtual_disk_identity: bool,
-) -> Result<Box<dyn StorageBackend>, ManagementError> {
-    let backend: Box<dyn StorageBackend> = Box::new(
-        crate::platform::windows::WindowsStorageBackend::open_physical_drive(
-            device_number,
-            windows_access(read_only),
-        )?,
-    );
+) -> Result<(Box<dyn StorageBackend>, BackendFacts), ManagementError> {
+    use crate::platform::windows::{WindowsStorageBackend, physical_disk};
+
+    // read-write backend는 disk를 배타적으로 열어 그 뒤에는 장치 정보를 물을 수 없다.
+    // 그래서 열기 전에 묻는다.
+    let disk = physical_disk(device_number).map(|disk| DiskFacts {
+        model: disk.description(),
+        bus: disk.bus_type.to_string(),
+        removable: disk.removable,
+        serial_number: disk.serial_number,
+    });
+    let backend =
+        WindowsStorageBackend::open_physical_drive(device_number, windows_access(read_only))?;
+    let mut facts = BackendFacts {
+        disk,
+        virtual_identity_active: None,
+        disk_protection: backend
+            .disk_protection()
+            .map(|protection| protection.to_string()),
+    };
     if virtual_disk_identity {
-        return Ok(Box::new(crate::disk_identity::VirtualDiskIdentity::new(
-            backend,
-        )?));
+        let backend = crate::disk_identity::VirtualDiskIdentity::new(Box::new(backend))?;
+        facts.virtual_identity_active = Some(backend.is_active());
+        return Ok((Box::new(backend), facts));
     }
-    Ok(backend)
+    Ok((Box::new(backend), facts))
 }
 
 #[cfg(not(windows))]
@@ -279,7 +439,7 @@ fn build_windows_physical_drive(
     _device_number: u32,
     _read_only: bool,
     _virtual_disk_identity: bool,
-) -> Result<Box<dyn StorageBackend>, ManagementError> {
+) -> Result<(Box<dyn StorageBackend>, BackendFacts), ManagementError> {
     Err(ManagementError::WindowsBackendUnavailable)
 }
 
@@ -287,12 +447,15 @@ fn build_windows_physical_drive(
 fn build_windows_volume(
     drive_letter: char,
     read_only: bool,
-) -> Result<Box<dyn StorageBackend>, ManagementError> {
-    Ok(Box::new(
-        crate::platform::windows::WindowsStorageBackend::open_volume(
-            drive_letter,
-            windows_access(read_only),
-        )?,
+) -> Result<(Box<dyn StorageBackend>, BackendFacts), ManagementError> {
+    Ok((
+        Box::new(
+            crate::platform::windows::WindowsStorageBackend::open_volume(
+                drive_letter,
+                windows_access(read_only),
+            )?,
+        ),
+        BackendFacts::default(),
     ))
 }
 
@@ -300,7 +463,7 @@ fn build_windows_volume(
 fn build_windows_volume(
     _drive_letter: char,
     _read_only: bool,
-) -> Result<Box<dyn StorageBackend>, ManagementError> {
+) -> Result<(Box<dyn StorageBackend>, BackendFacts), ManagementError> {
     Err(ManagementError::WindowsBackendUnavailable)
 }
 
@@ -668,5 +831,159 @@ mod tests {
         )));
         // 실패한 Target은 등록되지 않는다.
         assert!(api.targets().unwrap().is_empty());
+    }
+
+    /// 이 thread에서 `run`이 남긴 로그를 모아 돌려준다.
+    fn captured_log(run: impl FnOnce()) -> String {
+        #[derive(Clone, Default)]
+        struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+        impl std::io::Write for Capture {
+            fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buffer);
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let capture = Capture::default();
+        let writer = capture.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, run);
+        let bytes = capture.0.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn target_startup_logs_the_target_and_each_opened_lun() {
+        let image = std::env::temp_dir().join(format!(
+            "iscsi-target-startup-log-{}.img",
+            std::process::id()
+        ));
+        std::fs::write(&image, vec![0u8; 4096 * 3]).unwrap();
+        let name = IscsiName::parse("iqn.2026-07.example.com:startup-log").unwrap();
+        let mut target = TargetConfig::new(name.clone());
+        target.set_authentication(AuthenticationConfig::Chap(
+            ChapAuthenticationConfig::new("initiator".to_owned(), b"never-logged-secret".to_vec())
+                .unwrap(),
+        ));
+        target
+            .add_lun(
+                LunConfig::new(
+                    0,
+                    LunBackendConfig::Memory {
+                        block_size: 512,
+                        block_count: 64,
+                        read_only: true,
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        target
+            .add_lun(
+                LunConfig::new(
+                    7,
+                    LunBackendConfig::File {
+                        path: image.clone(),
+                        block_size: 4096,
+                        read_only: false,
+                        durable_flush: false,
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        let api = TargetServiceApi::new();
+        let log = captured_log(|| api.add_target(target).unwrap());
+        let serial = |lun| {
+            let mut scsi = ScsiTarget::default();
+            scsi.set_identity_namespace(name.as_str());
+            scsi.lun_serial_number(lun)
+        };
+        // serial은 INQUIRY가 돌려주는 것과 같은 16자리 hexadecimal이다.
+        assert_eq!(serial(0).len(), 16);
+        assert_ne!(serial(0), serial(7));
+        assert_eq!(
+            log,
+            format!(
+                " INFO Target ready name=\"iqn.2026-07.example.com:startup-log\" \
+                 authentication=\"chap\" chap_user=\"initiator\" luns=2\n \
+                 INFO LUN ready lun=0 backend=\"memory\" capacity_bytes=32768 block_size=512 \
+                 block_count=64 read_only=true serial=\"{}\"\n \
+                 INFO LUN ready lun=7 backend=\"file\" path={} capacity_bytes=12288 \
+                 block_size=4096 block_count=3 read_only=false durable_flush=false \
+                 serial=\"{}\"\n",
+                serial(0),
+                image.display(),
+                serial(7),
+            )
+        );
+        assert!(!log.contains("never-logged-secret"));
+
+        // 실행 중에 더한 LUN도 같은 줄을 남긴다.
+        let log = captured_log(|| {
+            api.add_lun(
+                &name,
+                LunConfig::new(
+                    1,
+                    LunBackendConfig::Memory {
+                        block_size: 512,
+                        block_count: 8,
+                        read_only: false,
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            log,
+            format!(
+                " INFO LUN ready lun=1 backend=\"memory\" capacity_bytes=4096 block_size=512 \
+                 block_count=8 read_only=false serial=\"{}\"\n",
+                serial(1)
+            )
+        );
+        drop(api);
+        let _ = std::fs::remove_file(&image);
+    }
+
+    #[test]
+    fn failed_startup_logs_no_ready_lines() {
+        let name = IscsiName::parse("iqn.2026-07.example.com:startup-failed").unwrap();
+        let mut target = TargetConfig::new(name);
+        for (lun, path) in [(0, None), (1, Some("missing-startup-log.img"))] {
+            let backend = match path {
+                None => LunBackendConfig::Memory {
+                    block_size: 512,
+                    block_count: 8,
+                    read_only: false,
+                },
+                Some(path) => LunBackendConfig::File {
+                    path: std::env::temp_dir().join(path),
+                    block_size: 512,
+                    read_only: true,
+                    durable_flush: false,
+                },
+            };
+            target
+                .add_lun(LunConfig::new(lun, backend).unwrap())
+                .unwrap();
+        }
+        let api = TargetServiceApi::new();
+        let log = captured_log(|| {
+            api.add_target(target).unwrap_err();
+        });
+        assert_eq!(log, "");
     }
 }

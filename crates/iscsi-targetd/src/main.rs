@@ -64,7 +64,6 @@ fn main() -> ExitCode {
             .map_err(TargetServiceError::from)
             .map_err(ServerError::from)?;
         println!("listening {address}");
-        tracing::info!(%address, "Target service started");
         server
             .run(async {
                 if let Err(error) = cli::shutdown_signal().await {

@@ -87,6 +87,32 @@ pub struct WindowsStorageBackend {
     _volume_locks: Vec<File>,
     /// 이 backend가 offline으로 바꾼 physical disk. drop하면 online으로 되돌린다.
     _offline: Option<DiskOfflineGuard>,
+    /// physical disk를 host로부터 어떻게 보호하고 있는지. volume이면 `None`이다.
+    disk_protection: Option<DiskProtection>,
+}
+
+/// serve하는 physical disk를 host의 접근으로부터 보호하는 방식.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskProtection {
+    /// 이 backend가 disk를 offline으로 바꿨고 닫을 때 되돌린다.
+    TakenOffline,
+    /// 열기 전부터 offline이었다. 그대로 두고 닫을 때도 건드리지 않는다.
+    AlreadyOffline,
+    /// offline으로 바꾸지 못해 disk 위의 mounted volume을 lock/dismount했다.
+    VolumeLock,
+    /// offline으로 바꾸지 못했고 read-only라 volume도 건드리지 않았다. 보호가 없다.
+    None,
+}
+
+impl std::fmt::Display for DiskProtection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::TakenOffline => "offline",
+            Self::AlreadyOffline => "already-offline",
+            Self::VolumeLock => "volume-lock",
+            Self::None => "online",
+        })
+    }
 }
 
 impl WindowsStorageBackend {
@@ -124,6 +150,11 @@ impl WindowsStorageBackend {
         self.durable_flush
     }
 
+    /// physical disk를 host로부터 어떻게 보호하고 있는지. volume이면 `None`이다.
+    pub fn disk_protection(&self) -> Option<DiskProtection> {
+        self.disk_protection
+    }
+
     fn open(
         path: PathBuf,
         access: WindowsStorageAccess,
@@ -142,11 +173,23 @@ impl WindowsStorageBackend {
             .open(&path)
             .map_err(|error| storage_io_error(StorageIoOperation::Open, error))?;
 
-        let offline = match kind {
-            WindowsDeviceKind::Volume => None,
+        let (offline, already_offline) = match kind {
+            WindowsDeviceKind::Volume => (None, false),
             WindowsDeviceKind::PhysicalDrive { device_number } => {
                 take_disk_offline(&path, &file, read_only, device_number)
             }
+        };
+        let disk_protection = match kind {
+            WindowsDeviceKind::Volume => None,
+            WindowsDeviceKind::PhysicalDrive { .. } => Some(if offline.is_some() {
+                DiskProtection::TakenOffline
+            } else if already_offline {
+                DiskProtection::AlreadyOffline
+            } else if read_only {
+                DiskProtection::None
+            } else {
+                DiskProtection::VolumeLock
+            }),
         };
 
         let volume_locks = if read_only {
@@ -183,6 +226,7 @@ impl WindowsStorageBackend {
             durable_flush: true,
             _volume_locks: volume_locks,
             _offline: offline,
+            disk_protection,
         })
     }
 }
@@ -297,14 +341,14 @@ impl Drop for DiskOfflineGuard {
 /// physical disk를 경고 후 offline으로 바꾸고, 바꿨다면 복원 guard를 반환한다.
 ///
 /// offline 전환은 serve의 전제 조건이 아니라 보호 조치이므로 실패해도 open을
-/// 중단하지 않는다. 이미 offline이거나 전환할 수 없으면 `None`을 반환하고 호출자가
-/// volume lock 방식으로 계속한다.
+/// 중단하지 않는다. 이미 offline이거나 전환할 수 없으면 guard 없이 반환하고 호출자가
+/// volume lock 방식으로 계속한다. 두 번째 값은 disk가 이미 offline이었는지 여부다.
 fn take_disk_offline(
     path: &Path,
     data: &File,
     read_only: bool,
     device_number: u32,
-) -> Option<DiskOfflineGuard> {
+) -> (Option<DiskOfflineGuard>, bool) {
     // `ReadOnly` data handle에는 write 접근이 없어 attribute를 바꿀 수 없으므로 제어용
     // handle을 따로 연다. `ReadWrite` data handle은 배타적으로 열려 있어 두 번째 open이
     // 불가능하므로 같은 접근 권한을 가진 handle을 복제한다.
@@ -322,31 +366,34 @@ fn take_disk_offline(
         Err(error) => {
             let error = storage_io_error(StorageIoOperation::Open, error);
             log_disk_offline_unavailable(device_number, &error);
-            return None;
+            return (None, false);
         }
     };
 
     match query_disk_offline(&control) {
         Ok(true) => {
             log_disk_already_offline(device_number);
-            return None;
+            return (None, true);
         }
         Ok(false) => {}
         Err(error) => {
             log_disk_offline_unavailable(device_number, &error);
-            return None;
+            return (None, false);
         }
     }
 
     log_disk_going_offline(device_number);
     match set_disk_offline(&control, true) {
-        Ok(()) => Some(DiskOfflineGuard {
-            control,
-            device_number,
-        }),
+        Ok(()) => (
+            Some(DiskOfflineGuard {
+                control,
+                device_number,
+            }),
+            false,
+        ),
         Err(error) => {
             log_disk_offline_unavailable(device_number, &error);
-            None
+            (None, false)
         }
     }
 }
@@ -804,11 +851,15 @@ impl PhysicalDiskInfo {
 /// 프로그램이 쓰고 있는 disk도 나온다. 정보를 물을 수 없는 disk는 목록에서 빠진다.
 pub fn physical_disks() -> Vec<PhysicalDiskInfo> {
     (0..PHYSICAL_DISK_SCAN_LIMIT)
-        .filter_map(query_physical_disk)
+        .filter_map(physical_disk)
         .collect()
 }
 
-fn query_physical_disk(device_number: u32) -> Option<PhysicalDiskInfo> {
+/// 번호 하나의 physical disk 정보. 그런 disk가 없거나 정보를 물을 수 없으면 `None`이다.
+///
+/// 다른 handle이 disk를 배타적으로 열고 있으면 물을 수 없으므로, serve하려는 disk의
+/// 정보는 backend를 열기 전에 물어야 한다.
+pub fn physical_disk(device_number: u32) -> Option<PhysicalDiskInfo> {
     // 접근 권한 0으로 열면 disk의 내용에는 손댈 수 없고 장치 정보만 물을 수 있다.
     let disk = OpenOptions::new()
         .access_mode(0)
