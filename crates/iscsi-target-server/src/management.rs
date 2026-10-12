@@ -315,26 +315,23 @@ fn log_lun_ready(config: &LunConfig, info: &LunInfo, serial: &str, facts: &Backe
             virtual_disk_identity,
             ..
         } => {
+            // 장치 정보를 묻지 못한 disk는 그 네 항목이 줄에서 빠진다.
             let disk = facts.disk.as_ref();
             tracing::info!(
                 lun,
                 backend = "physical drive",
                 device_number,
-                model = disk.map_or("unknown", |disk| disk.model.as_str()),
-                bus = disk.map_or("unknown", |disk| disk.bus.as_str()),
-                removable = disk.map_or("unknown", |disk| if disk.removable {
-                    "true"
-                } else {
-                    "false"
-                }),
-                hardware_serial = disk.map_or("unknown", |disk| disk.serial_number.as_str()),
+                model = disk.map(|disk| disk.model.as_str()),
+                bus = disk.map(|disk| disk.bus.as_str()),
+                removable = disk.map(|disk| disk.removable),
+                hardware_serial = disk.map(|disk| disk.serial_number.as_str()),
                 capacity_bytes,
                 block_size,
                 block_count,
                 read_only,
                 virtual_disk_identity,
                 virtual_disk_identity_active = facts.virtual_identity_active.unwrap_or(false),
-                offline = facts.disk_protection.as_deref().unwrap_or("unknown"),
+                protection = facts.disk_protection.as_deref(),
                 serial,
                 "LUN ready"
             );
@@ -985,5 +982,54 @@ mod tests {
             api.add_target(target).unwrap_err();
         });
         assert_eq!(log, "");
+    }
+
+    #[test]
+    fn physical_drive_log_line_shows_the_disk_and_how_it_is_protected() {
+        let config = LunConfig::new(
+            0,
+            LunBackendConfig::WindowsPhysicalDrive {
+                device_number: 1,
+                read_only: true,
+                virtual_disk_identity: true,
+            },
+        )
+        .unwrap();
+        let info = LunInfo {
+            lun: 0,
+            block_size: 512,
+            block_count: 120_176_640,
+            read_only: true,
+        };
+        let mut facts = BackendFacts {
+            disk: Some(DiskFacts {
+                model: "USB SanDisk 3.2Gen1".to_owned(),
+                bus: "USB".to_owned(),
+                removable: true,
+                serial_number: "0901672095de5a38705d".to_owned(),
+            }),
+            virtual_identity_active: Some(true),
+            disk_protection: Some("offline".to_owned()),
+        };
+        assert_eq!(
+            captured_log(|| log_lun_ready(&config, &info, "0CCD5F7D53575CE3", &facts)),
+            " INFO LUN ready lun=0 backend=\"physical drive\" device_number=1 \
+             model=\"USB SanDisk 3.2Gen1\" bus=\"USB\" removable=true \
+             hardware_serial=\"0901672095de5a38705d\" capacity_bytes=61530439680 \
+             block_size=512 block_count=120176640 read_only=true virtual_disk_identity=true \
+             virtual_disk_identity_active=true protection=\"offline\" \
+             serial=\"0CCD5F7D53575CE3\"\n"
+        );
+
+        // 장치 정보를 묻지 못했으면 그 항목들만 빠진다.
+        facts.disk = None;
+        facts.disk_protection = Some("volume-lock".to_owned());
+        assert_eq!(
+            captured_log(|| log_lun_ready(&config, &info, "0CCD5F7D53575CE3", &facts)),
+            " INFO LUN ready lun=0 backend=\"physical drive\" device_number=1 \
+             capacity_bytes=61530439680 block_size=512 block_count=120176640 read_only=true \
+             virtual_disk_identity=true virtual_disk_identity_active=true \
+             protection=\"volume-lock\" serial=\"0CCD5F7D53575CE3\"\n"
+        );
     }
 }
