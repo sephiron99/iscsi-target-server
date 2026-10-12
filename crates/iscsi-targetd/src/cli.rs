@@ -111,6 +111,18 @@ pub enum UsageError {
     UnknownArgument(String),
 }
 
+/// 로그의 시각을 이 PC의 시간대로 찍는다. 예: `2026-10-12 16:11:38.772 +09:00`.
+pub struct LocalTimer;
+
+impl tracing_subscriber::fmt::time::FormatTime for LocalTimer {
+    fn format_time(
+        &self,
+        writer: &mut tracing_subscriber::fmt::format::Writer<'_>,
+    ) -> std::fmt::Result {
+        write!(writer, "{}", iscsi_target_server::LocalTimestamp::now())
+    }
+}
+
 /// Ctrl-C 신호를 기다린다.
 pub async fn shutdown_signal() -> Result<(), std::io::Error> {
     tokio::signal::ctrl_c().await

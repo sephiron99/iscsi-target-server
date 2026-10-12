@@ -21,6 +21,7 @@ pub fn install() -> Result<LogReceiver, String> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_ansi(false)
+        .with_timer(LocalTimer)
         // 로그 영역이 좁으므로 module 경로는 빼고 시각, level과 내용만 남긴다.
         .with_target(false)
         .with_writer(move || LogWriter {
@@ -30,6 +31,18 @@ pub fn install() -> Result<LogReceiver, String> {
         .try_init()
         .map_err(|error| format!("failed to initialize logging: {error}"))?;
     Ok(LogReceiver { receiver, dropped })
+}
+
+/// 로그의 시각을 이 PC의 시간대로 찍는다. 예: `2026-10-12 16:11:38.772 +09:00`.
+struct LocalTimer;
+
+impl tracing_subscriber::fmt::time::FormatTime for LocalTimer {
+    fn format_time(
+        &self,
+        writer: &mut tracing_subscriber::fmt::format::Writer<'_>,
+    ) -> std::fmt::Result {
+        write!(writer, "{}", iscsi_target_server::LocalTimestamp::now())
+    }
 }
 
 pub struct LogReceiver {

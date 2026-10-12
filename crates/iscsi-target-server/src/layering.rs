@@ -50,6 +50,8 @@ const PROTOCOL_AND_CONFIGURATION: &[Module] = &[
     module!("config"),
     module!("config_file"),
     module!("management"),
+    // 로그에 찍을 현지 시각. 다른 모듈을 참조하지 않는다.
+    module!("local_time"),
 ];
 
 /// Tokio로 실제 TCP 접속을 처리하는 계층. async runtime을 쓰는 것은 이 묶음뿐이다.

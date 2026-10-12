@@ -27,6 +27,7 @@ fn main() -> ExitCode {
 
     if let Err(error) = tracing_subscriber::fmt()
         .with_max_level(options.log_level.tracing_level())
+        .with_timer(cli::LocalTimer)
         .with_writer(std::io::stderr)
         .try_init()
     {

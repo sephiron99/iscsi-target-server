@@ -12,7 +12,7 @@ use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use iscsi_target_server::{LunBackendConfig, LunConfig, ServerConfig};
+use iscsi_target_server::{LocalTimestamp, LunBackendConfig, LunConfig, ServerConfig};
 use winsafe::{self as w, co, gui, prelude::*};
 
 use crate::controller::{Controller, Event, LunView, ServerState, TargetView, describe_backend};
@@ -812,11 +812,8 @@ impl MainWindow {
 /// 새로 만드는 설정. Target 이름을 이 PC의 이름과 지금 날짜로 미리 채운다.
 fn new_settings() -> Settings {
     let computer_name = std::env::var("COMPUTERNAME").unwrap_or_default();
-    let unix_seconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or_default();
-    Settings::new_for(&computer_name, unix_seconds)
+    let now = LocalTimestamp::now();
+    Settings::new_for(&computer_name, now.year, now.month)
 }
 
 /// Edit에서 누른 ESC가 창을 닫지 않게 막는다.

@@ -19,4 +19,4 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
 # WinSafe는 Win32 전용이라 Windows target에서만 의존한다. `gui`는 창과 control,
 # `shell`은 설정 파일을 고르는 IFileOpenDialog에 필요하다.
 [target.'cfg(windows)'.dependencies]
-winsafe = { version = "0.0.29", features = ["gui", "shell"] }
+winsafe = { workspace = true, features = ["gui", "shell"] }

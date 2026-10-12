@@ -22,6 +22,8 @@ tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"
 tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+# 창과 무관한 Win32 wrapper만 쓴다. 현지 시각을 `unsafe` 없이 읽는 데 필요하다.
+winsafe = { workspace = true, features = ["kernel"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",

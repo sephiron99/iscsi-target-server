@@ -20,6 +20,7 @@ pub mod digest;
 pub mod disk_identity;
 pub mod error;
 pub mod frame;
+pub mod local_time;
 pub mod login;
 pub mod login_policy;
 pub mod management;
@@ -64,6 +65,7 @@ pub use frame::{
     DEFAULT_MAX_RECV_DATA_SEGMENT_LENGTH, FrameCodec, FrameConfig, MAX_AHS_LENGTH,
     MAX_DATA_SEGMENT_LENGTH, PduFrame, RawFrame,
 };
+pub use local_time::LocalTimestamp;
 pub use login::{
     AuthMethod, AuthMethodError, IscsiName, IscsiNameError, SessionType, SessionTypeError,
 };
