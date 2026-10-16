@@ -318,7 +318,7 @@ cargo clippy-win64
 git diff --check
 ```
 
-빌드 target은 `x86_64-pc-windows-msvc`(기본, 검증 기준)와 `i686-pc-windows-msvc`이다. WSL host에서는 Windows의 MSVC linker를 부르는 스크립트로 cross-build하고 WSL interop으로 Windows test binary를 실행한다. 그 linker 설정은 WSL 사용자의 `~/.cargo/config.toml`에 두며, 준비 방법은 저장소 `.cargo/config.toml`의 주석에 있다.
+빌드 target은 `x86_64-pc-windows-msvc`(기본, 검증 기준)와 `i686-pc-windows-msvc`이다. WSL host에서는 Windows의 MSVC linker를 부르는 스크립트로 cross-build하고 WSL interop으로 Windows test binary를 실행한다. 그 스크립트는 WSL 사용자의 PATH에 `link.exe`라는 이름으로 두며, 준비 방법은 저장소 `.cargo/config.toml`의 주석에 있다.
 
 Windows GUI가 추가된 뒤에는 Windows runner에서 GUI target의 build/check도 필수 검증에 포함한다.
 Windows storage backend는 GUI 도입 전부터 `windows-latest` runner에서 test와 clippy를 실행한다.

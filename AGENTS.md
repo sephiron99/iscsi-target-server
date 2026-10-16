@@ -182,7 +182,7 @@ git diff --check
 
 빌드 target은 MSVC 둘이다. `x86_64-pc-windows-msvc`가 기본이자 검증 기준이고, `i686-pc-windows-msvc`는 `cargo build-win32`와 `cargo test-win32`로 추가 확인한다. cargo-cross와 mingw(`*-windows-gnu`) target은 쓰지 않는다.
 
-WSL host에서는 Windows에 설치된 MSVC linker를 부르는 스크립트로 cross-build하고, WSL interop으로 Windows test binary를 실행한다. linker 설정은 PC마다 달라서 저장소가 아니라 WSL 사용자의 `~/.cargo/config.toml`에 둔다. 그 설정이 없으면 linker를 찾지 못해 빌드가 실패한다. 준비 방법과 제약은 `.cargo/config.toml`의 주석에 있다. 저장소의 `.cargo/config.toml`에 WSL 전용 linker 설정을 넣지 않는다. 넣으면 Windows에서 하는 빌드와 CI가 깨진다.
+WSL host에서는 Windows에 설치된 MSVC linker를 부르는 스크립트로 cross-build하고, WSL interop으로 Windows test binary를 실행한다. 그 스크립트는 저장소가 아니라 WSL 사용자의 PATH에 `link.exe`라는 이름으로 둔다. rustc가 MSVC target의 linker로 PATH의 `link.exe`를 찾기 때문이며, 없으면 linker를 찾지 못해 빌드가 실패한다. 준비 방법과 제약은 `.cargo/config.toml`의 주석에 있다. 저장소의 `.cargo/config.toml`에 WSL 전용 linker 설정을 넣지 않는다. 넣으면 Windows에서 하는 빌드와 CI가 깨진다.
 
 관련 변경에는 다음 테스트를 포함한다.
 

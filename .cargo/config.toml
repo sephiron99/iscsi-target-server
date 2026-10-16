@@ -6,19 +6,21 @@
 # Windows에서는 평소의 cargo 명령을 그대로 쓴다.
 #
 # WSL에서는 Windows에 설치된 MSVC linker를 부르는 스크립트
-# (https://github.com/sephiron99/msvc-wsl-rust)로 cross-build한다. 그 설정은 PC마다 다르므로
-# 이 저장소가 아니라 WSL 사용자의 `~/.cargo/config.toml`에 둔다. 준비:
+# (https://github.com/sephiron99/msvc-wsl-rust)로 cross-build한다. rustc는 MSVC target의
+# linker가 따로 정해지지 않으면 PATH에서 `link.exe`를 찾으므로, 그 스크립트를 `link.exe`라는
+# 이름으로 PATH에 둔다. 스크립트가 object 파일을 보고 64bit와 32bit를 알아서 고르므로 cargo
+# 설정은 필요 없다. 준비:
 #
 #   1. Windows에 Visual Studio 또는 Build Tools의 C++ 빌드 도구를 설치한다.
 #   2. 스크립트를 받고, 그 안의 config.sh에 MSVC와 Windows SDK 버전을 맞춘다.
 #   3. `rustup target add x86_64-pc-windows-msvc i686-pc-windows-msvc`
-#   4. `~/.cargo/config.toml`에 아래를 넣는다. 경로는 스크립트를 받은 위치의 절대 경로이다.
+#   4. 스크립트를 PATH의 directory에 `link.exe`로 link한다. 그 directory는 WSL이 붙이는
+#      Windows 쪽 PATH보다 앞에 있어야 한다. 예:
 #
-#        [target.x86_64-pc-windows-msvc]
-#        linker = "/path/to/msvc-wsl-rust/linker-x64.sh"
+#        ln -s /path/to/msvc-wsl-rust/linker.sh ~/.local/bin/link.exe
 #
-#        [target.i686-pc-windows-msvc]
-#        linker = "/path/to/msvc-wsl-rust/linker-x86.sh"
+# 이 저장소에는 WSL 전용 linker 설정을 넣지 않는다. 넣으면 Windows에서 하는 빌드와 CI가
+# 깨진다.
 #
 # 그 뒤에는 평소의 cargo 명령과 아래 alias를 쓴다.
 #
@@ -34,7 +36,8 @@
 # 주고, 여러 binary의 동시 link를 지원하고, link.exe가 manifest를 넣을 때 부르는 Windows
 # SDK의 mt.exe를 찾게 한다. `cargo test`가 test binary를 실행하고 병렬로 link하려면 앞의
 # 둘이, GUI 실행 파일에 manifest를 넣으려면(`crates/iscsi-target-gui/build.rs`) 마지막
-# 것이 필요하므로 원본이 아니라 fork를 쓴다.
+# 것이 필요하다. 또 `link.exe`로 불렸을 때 대상 아키텍처를 object 파일에서 알아낸다. 그래서
+# 원본이 아니라 fork를 쓴다.
 
 [alias]
 build-win64 = "build --release -p iscsi-targetd --target x86_64-pc-windows-msvc"
