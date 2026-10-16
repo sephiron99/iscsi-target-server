@@ -15,10 +15,10 @@
 #   4. `~/.cargo/config.toml`에 아래를 넣는다. 경로는 스크립트를 받은 위치의 절대 경로이다.
 #
 #        [target.x86_64-pc-windows-msvc]
-#        linker = "/path/to/msvc-linker/linker-x64.sh"
+#        linker = "/path/to/msvc-wsl-rust/linker-x64.sh"
 #
 #        [target.i686-pc-windows-msvc]
-#        linker = "/path/to/msvc-linker/linker-x86.sh"
+#        linker = "/path/to/msvc-wsl-rust/linker-x86.sh"
 #
 # 그 뒤에는 평소의 cargo 명령과 아래 alias를 쓴다.
 #
@@ -31,8 +31,10 @@
 #   결과물: target/<target>/release/iscsi-targetd.exe
 #
 # 위 주소는 원본(strickczq/msvc-wsl-rust)의 fork이다. 원본과 달리 link 결과물에 실행 권한을
-# 주고 여러 binary의 동시 link를 지원한다. `cargo test`가 test binary를 실행하고 병렬로
-# link하려면 이 두 가지가 필요하므로 원본이 아니라 fork를 쓴다.
+# 주고, 여러 binary의 동시 link를 지원하고, link.exe가 manifest를 넣을 때 부르는 Windows
+# SDK의 mt.exe를 찾게 한다. `cargo test`가 test binary를 실행하고 병렬로 link하려면 앞의
+# 둘이, GUI 실행 파일에 manifest를 넣으려면(`crates/iscsi-target-gui/build.rs`) 마지막
+# 것이 필요하므로 원본이 아니라 fork를 쓴다.
 
 [alias]
 build-win64 = "build --release -p iscsi-targetd --target x86_64-pc-windows-msvc"
